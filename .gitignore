@@ -14,7 +14,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/
@@ -218,3 +218,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-local data, secrets and build output
+backend/data/
+data/
+*.db
+*.sqlite3
+backend/.env
+backend/.env.*
+frontend/.env.local
+frontend/.env*.local
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Local QA captures and generated export
+artifacts/demo-screenshots/*.png
+artifacts/demo-screenshots/prospects-export.csv
