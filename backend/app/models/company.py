@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,6 +38,13 @@ class Company(Base):
     instagram_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     source_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    normalized_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    research_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    research_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    synthetic: Mapped[bool] = mapped_column(Boolean, default=False, nullable=True)
     duplicate_of_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True, index=True
     )

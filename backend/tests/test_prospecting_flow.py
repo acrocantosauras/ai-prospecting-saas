@@ -43,7 +43,7 @@ def client():
 
 
 @pytest.fixture(scope="module")
-def seeded(client):
+def seeded(client, auth_factory):
     db = SessionLocal()
     try:
         workspace = Workspace(slug="demo", name="Demo Workspace")
@@ -79,6 +79,8 @@ def seeded(client):
         db.add(other)
         db.commit()
 
+        # Nothing is reachable anonymously any more: sign an owner in first.
+        auth_factory(client, "demo", "owner")
         return {
             "workspace_id": str(workspace.id),
             "client_profile_id": str(profile.id),
@@ -203,9 +205,10 @@ def test_export_preview_matches_csv(client, completed_batch):
 
 
 def test_workspace_isolation(client, completed_batch, seeded):
+    # Naming another workspace is no longer a way to read it: the caller is not a
+    # member, so the workspace does not exist as far as the API is concerned.
     other_listing = client.get("/api/v1/prospects/?workspace_slug=other-workspace")
-    assert other_listing.status_code == 200
-    assert other_listing.json()["total"] == 0
+    assert other_listing.status_code == 404
 
     cross_workspace_batch = client.get(
         f"/api/v1/batches/{completed_batch['id']}?workspace_slug=other-workspace"

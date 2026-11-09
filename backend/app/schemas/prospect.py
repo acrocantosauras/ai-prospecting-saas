@@ -28,6 +28,9 @@ class ProspectBase(BaseModel):
     research_confidence: str | None = Field(None, max_length=64)
     missing_information: str | None = None
     source_links: str | None = None
+    qualification_status: str | None = None
+    qualification_confidence: float | None = None
+    synthetic: bool | None = None
     is_ready_for_outreach: bool | None = None
 
 

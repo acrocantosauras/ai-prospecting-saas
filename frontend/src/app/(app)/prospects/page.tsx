@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Suspense, useMemo, useState } from 'react';
 import { getExportPreview, downloadCsv, ApiError } from '@/lib/api';
+import { useWorkspaceSlug } from '@/lib/hooks/useAuth';
 import { TopBar } from '@/components/ui/topbar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -12,7 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/toast';
 import { Pagination } from '@/components/ui/pagination';
 import { SkeletonTable } from '@/components/ui/skeleton';
-import { useProspectSearch, WORKSPACE_SLUG } from '@/lib/hooks/useApi';
+import { useProspectSearch } from '@/lib/hooks/useApi';
 import { Avatar } from '@/components/ui/avatar';
 import { formatDate, cn, formatScore, scoreColor, readinessLabel } from '@/lib/utils';
 import { Search, X, Download, Filter, CheckCircle2, AlertCircle, ArrowUpDown, Building, Mail } from 'lucide-react';
@@ -31,6 +32,7 @@ function ProspectsPageContent() {
   const searchParams = useSearchParams();
 
   const toast = useToast();
+  const slug = useWorkspaceSlug();
 
   const initialBatchId = searchParams.get('batch') || undefined;
 
@@ -82,12 +84,12 @@ function ProspectsPageContent() {
     }
     setExporting(true);
     try {
-      const { batch_id, count } = await getExportPreview(activeBatchId, WORKSPACE_SLUG, true);
+      const { batch_id, count } = await getExportPreview(activeBatchId, slug, true);
       if (count === 0) {
         toast.addToast({ type: 'warning', title: 'Nothing to export', description: 'No prospects available for export.' });
         return;
       }
-      const csv = await downloadCsv(batch_id, WORKSPACE_SLUG, true);
+      const csv = await downloadCsv(batch_id, slug, true);
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');

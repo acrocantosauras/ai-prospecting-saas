@@ -27,7 +27,8 @@ class ICPProfileBase(BaseModel):
 
 
 class ICPProfileCreate(ICPProfileBase):
-    workspace_id: uuid.UUID
+    # Slug or UUID, validated against the caller's memberships on the server.
+    workspace_id: str = Field(..., min_length=1, max_length=100)
     client_profile_id: uuid.UUID | None = None
     model_config = {"from_attributes": True}
 

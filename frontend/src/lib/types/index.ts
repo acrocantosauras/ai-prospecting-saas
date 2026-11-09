@@ -273,6 +273,8 @@ export interface LeadExportRow {
   notes: string | null;
 }
 
+export * from './auth';
+
 export interface HealthResponse {
   status: string;
 }
@@ -295,6 +297,113 @@ export const STAGE_LABELS: Record<BatchStage, string> = {
   qualifying: 'Qualification',
   completed: 'Complete',
 };
+
+// Engine types
+
+export interface StageRun {
+  stage: string;
+  status: string;
+  detail: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface EngineBatchSnapshot {
+  id: string;
+  workspace_id: string;
+  name: string;
+  status: string;
+  current_stage: string | null;
+  source_mode: string;
+  requested_prospect_count: number;
+  total_discovered: number;
+  total_discovered_companies: number | null;
+  total_researched: number;
+  total_enriched: number;
+  total_qualified: number;
+  total_rejected: number | null;
+  error_message: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UsageTotals {
+  total_cost_usd: number;
+  total_calls: number;
+  by_capability: Record<string, number>;
+  per_company_usd: number | null;
+  per_decision_maker_usd: number | null;
+  per_verified_email_usd: number | null;
+  per_qualified_prospect_usd: number | null;
+  budget_usd: number | null;
+}
+
+export interface QualificationDecision {
+  id: string;
+  company_id: string | null;
+  prospect_id: string | null;
+  scope: string;
+  status: string;
+  score: number;
+  confidence: number;
+  reasons: string | null;
+  missing: string[];
+  evidence_urls: string[];
+  gates: Record<string, unknown>[];
+  policy: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ProspectVerification {
+  prospect_id: string;
+  email: string | null;
+  email_verified: boolean;
+  email_status: string | null;
+  qualification_status: string | null;
+  missing_information: string[];
+  enrichment: Record<string, unknown>[];
+  verification: Record<string, unknown>[];
+  evidence: Record<string, unknown>[];
+}
+
+export interface CompanyResearch {
+  provider: string;
+  what_it_does: string | null;
+  what_it_sells: string | null;
+  who_it_serves: string | null;
+  positioning: string | null;
+  public_developments: string | null;
+  observable_signals: unknown[];
+  missing_information: unknown[];
+  confidence: number | null;
+  synthetic: boolean;
+  research_timestamp: string;
+}
+
+export interface CompanyEvidence {
+  company_id: string;
+  company_name: string;
+  research: CompanyResearch | null;
+  evidence: Record<string, unknown>[];
+}
+
+export interface ProviderStatus {
+  name: string;
+  capability: string;
+  state: string;
+  synthetic: boolean;
+  available: boolean;
+  detail: string | null;
+  cost_per_call_usd: number;
+}
+
+export interface ProviderOverview {
+  mode: string;
+  providers: ProviderStatus[];
+  policy: Record<string, unknown>;
+  notes: string[];
+}
 
 export const STAGE_DESCRIPTIONS: Record<BatchStage, string> = {
   configured: 'Batch configured and ready to start.',

@@ -15,7 +15,8 @@ class ProspectBatchBase(BaseModel):
 
 
 class ProspectBatchCreate(ProspectBatchBase):
-    workspace_id: uuid.UUID
+    # Slug or UUID, validated against the caller's memberships on the server.
+    workspace_id: str = Field(..., min_length=1, max_length=100)
     model_config = {"from_attributes": True}
 
 

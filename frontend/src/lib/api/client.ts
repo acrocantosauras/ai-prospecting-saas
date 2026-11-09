@@ -12,20 +12,51 @@ import type {
   ProspectDetail,
   Prospect,
   LeadExportRow,
+  AuthSession,
+  AuthStatus,
+  WorkspaceInfo,
+  EngineBatchSnapshot,
+  StageRun,
+  QualificationDecision,
+  ProspectVerification,
+  CompanyEvidence,
+  ProviderOverview,
+  UsageTotals,
 } from '@/lib/types';
 
 const BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '');
+const AUTH_CSRF_COOKIE = 'prospect_csrf';
+const CSRF_HEADER = 'X-CSRF-Token';
+
+/** Try to read the readable CSRF cookie (`prospect_csrf`) from document.cookie. */
+function getCsrfFromCookie(): string | null {
+  try {
+    const raw = document.cookie;
+    if (!raw) return null;
+    const m = raw.match(new RegExp(String.raw`(?:^|;\s*)${AUTH_CSRF_COOKIE}=([^;]+)`));
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
 
 async function fetcher<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
+  const headers = new Headers(options?.headers);
+  // Attach CSRF token on non-safe methods when authenticated via cookie.
+  if (!headers.has('X-CSRF-Token')) {
+    const method = (options?.method ?? 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+      const m = getCsrfFromCookie();
+      if (m) headers.set(CSRF_HEADER, m);
+    }
+  }
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    credentials: 'include',
+    headers,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -200,7 +231,13 @@ export async function downloadCsv(
 ): Promise<string> {
   const q = new URLSearchParams({ workspace_slug: workspaceSlug });
   if (includeAll) q.set('include_all', 'true');
-  const res = await fetch(`${BASE_URL}/api/v1/exports/csv/${batchId}?${q.toString()}`);
+  const csrf = getCsrfFromCookie();
+  const headers: Record<string, string> = {};
+  if (csrf) headers['X-CSRF-Token'] = csrf;
+  const res = await fetch(`${BASE_URL}/api/v1/exports/csv/${batchId}?${q.toString()}`, {
+    credentials: 'include',
+    headers,
+  });
   if (!res.ok) {
     let detail = `Export failed (${res.status})`;
     try {
@@ -214,6 +251,73 @@ export async function downloadCsv(
   return res.text();
 }
 
+/** Stage-by-stage progress, counts and measured provider cost for a batch. */
+export async function getBatchProgress(
+  batchId: string,
+  workspaceSlug: string,
+): Promise<{
+  batch: EngineBatchSnapshot;
+  progress_percent: number;
+  stages: StageRun[];
+  usage: UsageTotals;
+  qualified_companies: number;
+  rejected_companies: number;
+  recheck_companies: number;
+}> {
+  return fetcher(`/api/v1/engine/batches/${encodeURIComponent(batchId)}/progress?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+
+/** Request cancellation of a pending or running batch. */
+export async function cancelBatch(
+  batchId: string,
+  workspaceSlug: string,
+): Promise<EngineBatchSnapshot> {
+  return fetcher(
+    `/api/v1/engine/batches/${encodeURIComponent(batchId)}/cancel?workspace_slug=${encodeURIComponent(workspaceSlug)}`,
+    { method: 'POST' },
+  );
+}
+
+/** Qualification decisions (including rejections) for a batch. */
+export async function getQualifications(
+  batchId: string,
+  workspaceSlug: string,
+  params?: {
+    status?: string;
+    scope?: string;
+    limit?: number;
+  },
+): Promise<QualificationDecision[]> {
+  const q = new URLSearchParams({ workspace_slug: workspaceSlug });
+  if (params?.status) q.set('status', params.status);
+  if (params?.scope) q.set('scope', params.scope);
+  if (params?.limit) q.set('limit', String(params.limit));
+  return fetcher(`/api/v1/engine/batches/${encodeURIComponent(batchId)}/qualifications?${q.toString()}`);
+}
+
+/** Verification, enrichment and evidence detail for a prospect. */
+export async function getProspectVerification(
+  prospectId: string,
+  workspaceSlug: string,
+): Promise<ProspectVerification> {
+  return fetcher(`/api/v1/engine/prospects/${encodeURIComponent(prospectId)}/verification?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+
+/** Research findings and evidence for a company. */
+export async function getCompanyEvidence(
+  companyId: string,
+  workspaceSlug: string,
+): Promise<CompanyEvidence> {
+  return fetcher(`/api/v1/engine/companies/${encodeURIComponent(companyId)}/evidence?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+
+/** Provider availability, capabilities and the active qualification policy. */
+export async function getProviderOverview(
+  workspaceSlug: string,
+): Promise<ProviderOverview> {
+  return fetcher(`/api/v1/engine/providers?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+
 export async function getExportPreview(
   batchId: string,
   workspaceSlug: string,
@@ -224,16 +328,36 @@ export async function getExportPreview(
   return fetcher(`/api/v1/exports/preview/${batchId}?${q.toString()}`);
 }
 
+// Auth
+export async function getAuthStatus(): Promise<AuthStatus> {
+  return fetcher<AuthStatus>('/api/v1/auth/status');
+}
+
+export async function getAuthMe(workspaceSlug?: string): Promise<AuthSession> {
+  const q = workspaceSlug ? `?workspace_slug=${encodeURIComponent(workspaceSlug)}` : '';
+  return fetcher<AuthSession>(`/api/v1/auth/me${q}`);
+}
+
+export async function login(email: string, password: string): Promise<AuthSession> {
+  return fetcher<AuthSession>('/api/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function logout(): Promise<void> {
+  await fetcher<void>('/api/v1/auth/logout', { method: 'POST' });
+}
+
 // Workspace helper to discover current workspace
-export async function getCurrentWorkspace(slug = 'demo'): Promise<{
+export async function getCurrentWorkspace(slug: string): Promise<{
   slug: string;
   profiles: ClientProfile[];
   icps: ICPProfile[];
   batches: ProspectBatch[];
 }> {
   const profiles = await getClientProfiles(slug);
-  const icps = await getICPProfiles(slug);
-  const batches = await getBatches(slug);
+  const icps = await getICPProfiles(slug);  const batches = await getBatches(slug);
   return {
     slug,
     profiles,
@@ -241,3 +365,5 @@ export async function getCurrentWorkspace(slug = 'demo'): Promise<{
     batches: batches.items || [],
   };
 }
+
+

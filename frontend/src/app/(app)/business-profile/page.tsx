@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { getClientProfiles, getClientProfile, createClientProfile, updateClientProfile, ApiError } from '@/lib/api';
+import { useWorkspaceSlug } from '@/lib/hooks/useAuth';
 import type { ClientProfile } from '@/lib/types';
 import { TopBar } from '@/components/ui/topbar';
 import { Button } from '@/components/ui/button';
@@ -10,7 +11,6 @@ import { Input, Textarea, Label } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/toast';
 import { SkeletonPage } from '@/components/ui/skeleton';
-import { WORKSPACE_SLUG } from '@/lib/hooks/useApi';
 import { formatDate, cn, truncate } from '@/lib/utils';
 import { Save, Plus, Edit2 } from 'lucide-react';
 
@@ -50,11 +50,13 @@ export default function BusinessProfilePage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const slug = useWorkspaceSlug();
+
   const loadProfiles = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getClientProfiles(WORKSPACE_SLUG);
+      const data = await getClientProfiles(slug);
       setProfiles(data as ClientProfile[] || []);
       setCreating(false);
     } catch (e) {
@@ -62,11 +64,11 @@ export default function BusinessProfilePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [slug]);
 
   useEffect(() => {
     let cancelled = false;
-    getClientProfiles(WORKSPACE_SLUG)
+    getClientProfiles(slug)
       .then(data => {
         if (cancelled) return;
         const list = (data as ClientProfile[]) || [];
@@ -103,7 +105,7 @@ export default function BusinessProfilePage() {
 
   const selectProfile = async (id: string) => {
     try {
-      const data = await getClientProfile(id, WORKSPACE_SLUG);
+      const data = await getClientProfile(id, slug);
       setSelectedProfile(data || null);
       setSelectedId(id);
       if (data) {
@@ -170,19 +172,19 @@ export default function BusinessProfilePage() {
       let result: ClientProfile;
       if (creating) {
         result = await createClientProfile({
-          workspace_id: WORKSPACE_SLUG,
+          workspace_id: slug,
           ...form,
         });
         toast.addToast({ type: 'success', title: 'Profile created' });
         setCreating(false);
       } else if (selectedId) {
-        result = await updateClientProfile(selectedId, form, WORKSPACE_SLUG);
+        result = await updateClientProfile(selectedId, form, slug);
         toast.addToast({ type: 'success', title: 'Profile updated' });
       } else {
         throw new Error('No profile selected');
       }
       setSelectedProfile(result);
-      const updated = await getClientProfiles(WORKSPACE_SLUG);
+      const updated = await getClientProfiles(slug);
       setProfiles(updated || []);
       setMode('read');
     } catch (e) {

@@ -83,8 +83,13 @@ def _get_icp_profile(db, icp_id: uuid.UUID) -> ICPProfileResponse:
     return ICPProfileResponse.model_validate(icp)
 
 
-def run_prospecting_pipeline(batch_id: str, workspace_slug: str) -> None:
-    """Background task that executes the full prospecting journey."""
+def run_prospecting_pipeline(batch_id: str, workspace_ref: str | None = None) -> None:
+    """Background task that executes the full prospecting journey.
+
+    The worker needs no live user session: it loads the batch by id and scopes
+    everything to the batch's persisted ``workspace_id``. ``workspace_ref`` is a
+    consistency assertion only and can deny a mismatched run, never grant one.
+    """
     db = SessionLocal()
     batch = None
     try:
@@ -96,6 +101,14 @@ def run_prospecting_pipeline(batch_id: str, workspace_slug: str) -> None:
         if not batch:
             logger.error("Batch not found: %s", batch_id)
             return
+        if workspace_ref and batch.workspace is not None:
+            reference = workspace_ref.strip()
+            if reference not in (batch.workspace.slug, str(batch.workspace_id)):
+                logger.warning(
+                    "Refusing to run batch %s: workspace reference does not match",
+                    batch.id,
+                )
+                return
 
         registry = get_registry()
         client_profile = _get_client_profile(db, batch.client_profile_id)

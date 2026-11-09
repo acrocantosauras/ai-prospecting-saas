@@ -1,39 +1,98 @@
 """Prospect API endpoints."""
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
+from app.auth.dependencies import WorkspaceCtx, ensure_permission
+from app.auth.permissions import Permission
 from app.core.database import get_db
-from app.models import Prospect, Company, DecisionMaker, Evidence, EnrichmentRecord, VerificationRecord
-from app.models import Workspace, ProspectBatch
+from app.models import Prospect, ProspectBatch, Workspace
 from app.schemas.prospect import (
-    ProspectResponse,
-    ProspectListResponse,
     ProspectDetailResponse,
+    ProspectListResponse,
+    ProspectResponse,
     ProspectUpdate,
 )
 
 router = APIRouter()
 
+DbSession = Annotated[Session, Depends(get_db)]
 
-def get_prospect_or_404(db, prospect_id: uuid.UUID, workspace_slug: str):
-    promise = (
+
+def _text_filters(
+    search: str | None, industry: str | None, country: str | None
+) -> list:
+    """Build the free-text and location filters for the prospect list."""
+    clauses: list = []
+    if search:
+        term = f"%{search}%"
+        clauses.append(
+            (Prospect.company_name.ilike(term))
+            | (Prospect.full_name.ilike(term))
+            | (Prospect.email.ilike(term))
+            | (Prospect.role.ilike(term))
+            | (Prospect.industry.ilike(term))
+            | (Prospect.country.ilike(term))
+        )
+    if industry:
+        clauses.append(Prospect.industry.ilike(f"%{industry}%"))
+    if country:
+        clauses.append(Prospect.country.ilike(f"%{country}%"))
+    return clauses
+
+
+def _quality_filters(
+    min_score: float | None,
+    max_score: float | None,
+    email_status: str | None,
+    ready_for_outreach: bool | None,
+) -> list:
+    """Build the score, email-status and readiness filters."""
+    clauses: list = []
+    if min_score is not None:
+        clauses.append(Prospect.qualification_score >= min_score)
+    if max_score is not None:
+        clauses.append(Prospect.qualification_score <= max_score)
+    if email_status == "available":
+        clauses.append(Prospect.email.isnot(None))
+    elif email_status == "unavailable":
+        clauses.append(Prospect.email.is_(None))
+    elif email_status == "verified":
+        clauses.extend(
+            [
+                Prospect.email.isnot(None),
+                Prospect.research_confidence.ilike("%verified%"),
+            ]
+        )
+    elif email_status == "unverified":
+        clauses.append(Prospect.email.isnot(None))
+    if ready_for_outreach is not None:
+        clauses.append(Prospect.is_ready_for_outreach == ready_for_outreach)
+    return clauses
+
+
+def get_prospect_or_404(db: Session, prospect_id: uuid.UUID, workspace: Workspace) -> Prospect:
+    """Return a prospect that belongs to this workspace, or raise 404."""
+    prospect = (
         db.query(Prospect)
         .filter(Prospect.id == prospect_id)
         .join(Prospect.batch)
         .join(ProspectBatch.workspace)
-        .filter(Workspace.slug == workspace_slug)
+        .filter(Workspace.id == workspace.id)
         .first()
     )
-    if not promise:
+    if not prospect:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prospect not found")
-    return promise
+    return prospect
 
 
 @router.get("/", response_model=ProspectListResponse)
 def list_prospects(
-    workspace_slug: str,
+    ctx: WorkspaceCtx,
+    db: DbSession,
     batch_id: uuid.UUID | None = None,
     search: str | None = None,
     industry: str | None = None,
@@ -46,47 +105,23 @@ def list_prospects(
     page_size: int = Query(20, ge=1, le=100),
     sort_by: str = Query("created_at"),
     sort_order: str = Query("desc"),
-    db=Depends(get_db),
 ):
+    """List prospects in the caller's workspace with filters and paging."""
+    ensure_permission(ctx, Permission.VIEW_WORKSPACE)
     query = (
         db.query(Prospect)
         .join(Prospect.batch)
         .join(ProspectBatch.workspace)
-        .filter(Workspace.slug == workspace_slug)
+        .filter(Workspace.id == ctx.workspace.id)
     )
+    clauses = _text_filters(search, industry, country)
     if batch_id:
-        query = query.filter(Prospect.batch_id == batch_id)
-    if search:
-        term = f"%{search}%"
-        query = query.filter(
-            (Prospect.company_name.ilike(term))
-            | (Prospect.full_name.ilike(term))
-            | (Prospect.email.ilike(term))
-            | (Prospect.role.ilike(term))
-            | (Prospect.industry.ilike(term))
-            | (Prospect.country.ilike(term))
-        )
-    if industry:
-        query = query.filter(Prospect.industry.ilike(f"%{industry}%"))
-    if country:
-        query = query.filter(Prospect.country.ilike(f"%{country}%"))
-    if min_score is not None:
-        query = query.filter(Prospect.qualification_score >= min_score)
-    if max_score is not None:
-        query = query.filter(Prospect.qualification_score <= max_score)
-    if email_status == "available":
-        query = query.filter(Prospect.email.isnot(None))
-    elif email_status == "unavailable":
-        query = query.filter(Prospect.email.is_(None))
-    elif email_status == "verified":
-        query = query.filter(
-            Prospect.email.isnot(None),
-            Prospect.research_confidence.ilike("%verified%"),
-        )
-    elif email_status == "unverified":
-        query = query.filter(Prospect.email.isnot(None))
-    if ready_for_outreach is not None:
-        query = query.filter(Prospect.is_ready_for_outreach == ready_for_outreach)
+        clauses.append(Prospect.batch_id == batch_id)
+    clauses.extend(
+        _quality_filters(min_score, max_score, email_status, ready_for_outreach)
+    )
+    if clauses:
+        query = query.filter(*clauses)
 
     total = query.count()
     sort_column = getattr(Prospect, sort_by, None)
@@ -101,10 +136,12 @@ def list_prospects(
 @router.get("/{prospect_id}", response_model=ProspectDetailResponse)
 def get_prospect_detail(
     prospect_id: uuid.UUID,
-    workspace_slug: str,
-    db=Depends(get_db),
+    ctx: WorkspaceCtx,
+    db: DbSession,
 ):
-    prospect = get_prospect_or_404(db, prospect_id, workspace_slug)
+    """Return full prospect detail including evidence and verification."""
+    ensure_permission(ctx, Permission.VIEW_WORKSPACE)
+    prospect = get_prospect_or_404(db, prospect_id, ctx.workspace)
     company_data = None
     decision_maker_data = None
     if prospect.company:
@@ -175,10 +212,12 @@ def get_prospect_detail(
 def update_prospect(
     prospect_id: uuid.UUID,
     data: ProspectUpdate,
-    workspace_slug: str,
-    db=Depends(get_db),
+    ctx: WorkspaceCtx,
+    db: DbSession,
 ):
-    prospect = get_prospect_or_404(db, prospect_id, workspace_slug)
+    """Update manually reviewable research fields on a prospect."""
+    ensure_permission(ctx, Permission.MANAGE_PROFILES)
+    prospect = get_prospect_or_404(db, prospect_id, ctx.workspace)
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(prospect, field, value)

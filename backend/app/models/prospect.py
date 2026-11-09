@@ -49,6 +49,10 @@ class Prospect(Base):
     research_confidence: Mapped[str | None] = mapped_column(String(64), nullable=True)
     missing_information: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_links: Mapped[str | None] = mapped_column(Text, nullable=True)
+    qualification_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    qualification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_urls: Mapped[str | None] = mapped_column(Text, nullable=True)
+    synthetic: Mapped[bool] = mapped_column(default=False, nullable=True)
     is_ready_for_outreach: Mapped[bool] = mapped_column(default=False, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

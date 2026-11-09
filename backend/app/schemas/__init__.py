@@ -64,8 +64,10 @@ class ClientProfileBase(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ``workspace_id`` is a selector (slug or UUID). It is validated against the
+# caller's workspace memberships; it is never proof of authorization.
 class ClientProfileCreate(ClientProfileBase):
-    workspace_id: uuid.UUID
+    workspace_id: str = Field(..., min_length=1, max_length=100)
 
 
 class ClientProfileUpdate(BaseModel):
@@ -124,7 +126,7 @@ class ICPProfileBase(BaseModel):
 
 
 class ICPProfileCreate(ICPProfileBase):
-    workspace_id: uuid.UUID
+    workspace_id: str = Field(..., min_length=1, max_length=100)
     client_profile_id: uuid.UUID | None = None
 
 
@@ -339,6 +341,9 @@ class ProspectBase(BaseModel):
     research_confidence: str | None = Field(None, max_length=64)
     missing_information: str | None = None
     source_links: str | None = None
+    qualification_status: str | None = None
+    qualification_confidence: float | None = None
+    synthetic: bool | None = None
     is_ready_for_outreach: bool | None = None
     model_config = {"from_attributes": True}
 

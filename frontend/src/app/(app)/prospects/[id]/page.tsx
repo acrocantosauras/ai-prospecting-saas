@@ -3,10 +3,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import { useWorkspaceSlug } from '@/lib/hooks/useAuth';
 
 // This page is dynamic — prospect id is only known at request time.
 export const dynamic = 'force-dynamic';
-import { getProspect, ApiError } from '@/lib/api';
+import { getProspect, getProspectVerification, getCompanyEvidence, ApiError } from '@/lib/api';
 
 import { TopBar } from '@/components/ui/topbar';
 import { Button } from '@/components/ui/button';
@@ -18,47 +19,78 @@ import { Avatar } from '@/components/ui/avatar';
 import { TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { formatDate, cn, formatScore, scoreColor, scoreBg, readinessLabel, confidenceColor, externalUrl, truncate, parseCommaList } from '@/lib/utils';
 import { ArrowLeft, ArrowRight, Building2, User, Globe, Link2, Mail, ShieldCheck, AlertTriangle, Lightbulb, HelpCircle, Target, CheckCircle2, XCircle, Certificate } from 'lucide-react';
-import type { ProspectDetail, EvidenceItem, EnrichmentRecord, VerificationRecord } from '@/lib/types';
+import type { ProspectDetail, EvidenceItem, EnrichmentRecord, VerificationRecord, ProspectVerification, CompanyEvidence } from '@/lib/types';
 
 export default function ProspectDetailPage() {
   const params = useParams();
   const toast = useToast();
+  const slug = useWorkspaceSlug();
   const prospectId = params.id as string;
 
   const [prospect, setProspect] = useState<ProspectDetail | null>(null);
+  const [verification, setVerification] = useState<ProspectVerification | null>(null);
+  const [companyEvidence, setCompanyEvidence] = useState<CompanyEvidence | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadProspect = useCallback(async () => {
+    if (!slug) return;
     try {
       setLoading(true);
       setError(null);
-      const data: ProspectDetail = await getProspect(prospectId, 'demo');
-      setProspect(data);
+      const pData = await getProspect(prospectId, slug);
+      const vData = await getProspectVerification(prospectId, slug);
+      let cData: CompanyEvidence | null = null;
+      if (pData.company_id) {
+        try {
+          cData = await getCompanyEvidence(pData.company_id, slug);
+        } catch {
+          // Company evidence may not be available; proceed without it
+        }
+      }
+      setProspect(pData);
+      setVerification(vData);
+      setCompanyEvidence(cData);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to load prospect');
     } finally {
       setLoading(false);
     }
-  }, [prospectId]);
+  }, [prospectId, slug]);
 
   useEffect(() => {
     let cancelled = false;
-    getProspect(prospectId, 'demo')
-      .then(data => {
+    (async () => {
+      if (!slug) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+      try {
+        const pData = await getProspect(prospectId, slug);
         if (cancelled) return;
-        setProspect(data);
+        setProspect(pData);
         setError(null);
-      })
-      .catch(e => {
+        const vData = await getProspectVerification(prospectId, slug);
+        if (cancelled) return;
+        setVerification(vData);
+        let cData: CompanyEvidence | null = null;
+        if (pData.company_id) {
+          try {
+            cData = await getCompanyEvidence(pData.company_id, slug);
+          } catch {
+            // Company evidence may not be available
+          }
+        }
+        if (!cancelled) setCompanyEvidence(cData);
+      } catch (e) {
         if (cancelled) return;
         setError(e instanceof ApiError ? e.message : 'Failed to load prospect');
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
     return () => { cancelled = true; };
-  }, [prospectId]);
+  }, [prospectId, slug]);
 
   if (loading && !prospect) {
     return (        <div className="flex-col min-h-screen">
@@ -186,6 +218,8 @@ export default function ProspectDetailPage() {
         {/* Tabs */}
         <TabsList defaultValue="overview">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="verification">Verification & Enrichment</TabsTrigger>
+          <TabsTrigger value="evidence">Company Evidence</TabsTrigger>
           <TabsTrigger value="research">Research Findings</TabsTrigger>
           <TabsTrigger value="problem">Identified Problem</TabsTrigger>
           <TabsTrigger value="fit">Why This Fits</TabsTrigger>
@@ -843,6 +877,366 @@ export default function ProspectDetailPage() {
               </Card>
             )}
           </div>
+        </TabsContent>
+
+        {/* Verification & Enrichment tab */}
+        <TabsContent value="verification">
+          <div className="space-y-4">
+            {/* Email verification status */}
+            {verification && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                    Email Verification Status
+                  </CardTitle>
+                  <CardDescription>
+                    {verification.email_verified
+                      ? 'Email has been verified by a provider.'
+                      : verification.email_status === 'unverified'
+                      ? 'Email has not been verified. DNS/MX records alone do not constitute verification.'
+                      : 'Email verification status is unavailable.'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-4">
+                    <div className={cn(
+                      'flex h-12 w-12 shrink-0 items-center justify-center rounded-full',
+                      verification.email_verified ? 'bg-green-50 text-green-600' : 'bg-amber-50 text-amber-600'
+                    )}>
+                      {verification.email_verified ? (
+                        <CheckCircle2 className="h-6 w-6" />
+                      ) : (
+                        <AlertTriangle className="h-6 w-6" />
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">
+                        {verification.email_verified ? 'Verified' : 'Not verified'}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Email: {verification.email || '—'}<br />
+                        Status: {verification.email_status || 'unknown'}<br />
+                        Qualification: {verification.qualification_status || 'not assessed'}
+                      </p>
+                    </div>
+                  </div>
+                  {verification.missing_information.length > 0 && (
+                    <div className="mt-4 rounded-lg bg-amber-50 p-3 border border-amber-100">
+                      <p className="text-xs font-medium text-amber-800 uppercase tracking-wide mb-1">Missing Information</p>
+                      <ul className="text-xs text-amber-700 space-y-0.5 list-disc list-inside">
+                        {verification.missing_information.map((item, i) => (
+                          <li key={i}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Enrichment records from engine */}
+            {verification && verification.enrichment.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <User className="h-4 w-4 text-muted-foreground" />
+                    Enrichment Records (engine)
+                  </CardTitle>
+                  <CardDescription>Contact and profile data from prospecting providers.</CardDescription>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="divide-y divide-border">
+                    {verification.enrichment.map((er, i) => {
+                      const e = er as Record<string, string | number | null | undefined>;
+                      return (
+                        <div key={i} className="py-3">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-medium">{String(e.provider || 'Unknown provider')}</p>
+                              {String(e.email_status || '') && (
+                                <Badge variant={e.email_status === 'deliverable' ? 'success' : e.email_status === 'unavailable' ? 'destructive' : 'warning'}>
+                                  {String(e.email_status)}
+                                </Badge>
+                              )}
+                            </div>
+                            {typeof e.email_confidence === 'number' && e.email_confidence !== null && (
+                              <span className="text-xs text-muted-foreground">Confidence: {e.email_confidence}%</span>
+                            )}
+                          </div>
+                          {String(e.email || '') && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              <a href={`mailto:${e.email}`} className="hover:underline">{e.email}</a>
+                            </p>
+                          )}
+                          {String(e.linkedin_url || '') && (
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              LinkedIn: <a href={e.linkedin_url as string} target="_blank" rel="noopener noreferrer" className="hover:underline">{truncate(String(e.linkedin_url), 50)}</a>
+                            </p>
+                          )}
+                          {String(e.notes || '') && (
+                            <p className="text-xs text-muted-foreground mt-1">{String(e.notes)}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Verification records from engine */}
+            {verification && verification.verification.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                    Provider Verification Attempts
+                  </CardTitle>
+                  <CardDescription>Results from email verification providers. DNS/MX existence alone does not mean verified.</CardDescription>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="divide-y divide-border">
+                    {verification.verification.map((vr, i) => (
+                      <div key={i} className="py-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium">{String(vr.provider || 'Unknown provider')}</p>
+                            <span className="text-xs text-muted-foreground">{String(vr.email || '')}</span>
+                          </div>
+                          <Badge variant={
+                            String(vr.status) === 'verified' ? 'success' :
+                            String(vr.status) === 'invalid' || String(vr.status) === 'unavailable' ? 'destructive' : 'warning'
+                          }>
+                            {String(vr.status) || 'unknown'}
+                          </Badge>
+                        </div>
+                        {String(vr.details || '') && (
+                          <p className="text-xs text-muted-foreground mt-1">{String(vr.details)}</p>
+                        )}
+                        {vr.verified_at && (
+                          <p className="text-xs text-muted-foreground mt-0.5">Verified at: {formatDate(String(vr.verified_at))}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Legacy verification records (from prospect endpoint) */}
+            {p.verification_records.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Certificate className="h-4 w-4 text-muted-foreground" />
+                    Verification Records (legacy)
+                  </CardTitle>
+                  <CardDescription>Previously stored verification data from the prospecting system.</CardDescription>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="divide-y divide-border">
+                    {p.verification_records.map((vr) => (
+                      <div key={vr.id} className="py-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium">{vr.provider || 'Unknown provider'}</p>
+                            {vr.status && (
+                              <Badge variant={vr.status === 'verified' ? 'success' : vr.status === 'invalid' || vr.status === 'unavailable' ? 'destructive' : 'warning'}>
+                                {vr.status}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        {vr.email && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            <a href={`mailto:${vr.email}`} className="hover:underline">{vr.email}</a>
+                          </p>
+                        )}
+                        {vr.details && (
+                          <p className="text-xs text-muted-foreground mt-1">{vr.details}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Legacy enrichment records */}
+            {p.enrichment_records.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <User className="h-4 w-4 text-muted-foreground" />
+                    Enrichment Records (legacy)
+                  </CardTitle>
+                  <CardDescription>Previously stored enrichment data from the prospecting system.</CardDescription>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="divide-y divide-border">
+                    {p.enrichment_records.map((er) => (
+                      <div key={er.id} className="py-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium">{er.provider || 'Unknown provider'}</p>
+                            {er.email_status && (
+                              <Badge variant={er.email_status === 'deliverable' ? 'success' : er.email_status === 'unavailable' ? 'destructive' : 'warning'}>
+                                {er.email_status}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        {er.email && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            <a href={`mailto:${er.email}`} className="hover:underline">{er.email}</a>
+                          </p>
+                        )}
+                        {er.linkedin_url && (
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            LinkedIn: {truncate(er.linkedin_url, 50)}
+                          </p>
+                        )}
+                        {er.instagram_url && (
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Instagram: {truncate(er.instagram_url, 50)}
+                          </p>
+                        )}
+                        {er.email_confidence !== null && (
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Confidence: {er.email_confidence}%
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </TabsContent>
+
+        {/* Company Evidence tab */}
+        <TabsContent value="evidence">
+          {companyEvidence ? (
+            <div className="space-y-4">
+              {/* Company research summary */}
+              {companyEvidence.research && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      Company Research
+                    </CardTitle>
+                    <CardDescription>
+                      {companyEvidence.research.synthetic
+                        ? 'Synthetic/illustrative research data — not from public company research.'
+                        : `Research by ${companyEvidence.research.provider}. Confidence: ${companyEvidence.research.confidence !== null ? companyEvidence.research.confidence + '%' : 'not assessed'}.`}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <dl className="divide-y divide-border">
+                      {companyEvidence.research.what_it_does && (
+                        <div className="py-3">
+                          <dt className="text-xs text-muted-foreground font-medium mb-0.5">What they do</dt>
+                          <dd className="text-sm">{companyEvidence.research.what_it_does}</dd>
+                        </div>
+                      )}
+                      {companyEvidence.research.what_it_sells && (
+                        <div className="py-3">
+                          <dt className="text-xs text-muted-foreground font-medium mb-0.5">What they sell</dt>
+                          <dd className="text-sm">{companyEvidence.research.what_it_sells}</dd>
+                        </div>
+                      )}
+                      {companyEvidence.research.who_it_serves && (
+                        <div className="py-3">
+                          <dt className="text-xs text-muted-foreground font-medium mb-0.5">Who they serve</dt>
+                          <dd className="text-sm">{companyEvidence.research.who_it_serves}</dd>
+                        </div>
+                      )}
+                      {companyEvidence.research.positioning && (
+                        <div className="py-3">
+                          <dt className="text-xs text-muted-foreground font-medium mb-0.5">Positioning</dt>
+                          <dd className="text-sm">{companyEvidence.research.positioning}</dd>
+                        </div>
+                      )}
+                      {companyEvidence.research.public_developments && (
+                        <div className="py-3">
+                          <dt className="text-xs text-muted-foreground font-medium mb-0.5">Public developments</dt>
+                          <dd className="text-sm">{companyEvidence.research.public_developments}</dd>
+                        </div>
+                      )}
+                      {companyEvidence.research.missing_information && Array.isArray(companyEvidence.research.missing_information) && companyEvidence.research.missing_information.length > 0 && (
+                        <div className="py-3">
+                          <dt className="text-xs text-muted-foreground font-medium mb-0.5">Missing information</dt>
+                          <dd className="text-sm text-amber-600">
+                            {companyEvidence.research.missing_information.map((item, i: number) => (
+                              <div key={i}>• {String(item)}</div>
+                            ))}
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                    <div className="mt-4 pt-3 border-t border-border text-xs text-muted-foreground">
+                      <p>Research timestamp: {formatDate(companyEvidence.research.research_timestamp)}</p>
+                      <p>Provider: {companyEvidence.research.provider}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Evidence items */}
+              {companyEvidence.evidence.length > 0 ? (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Link2 className="h-4 w-4 text-muted-foreground" />
+                      Evidence & Sources
+                    </CardTitle>
+                    <CardDescription>Supporting evidence collected during research.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="divide-y divide-border">
+                      {companyEvidence.evidence.map((ev, i) => (
+                        <div key={i} className="py-3">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-medium">{String(ev.label || 'Source')}</p>
+                              {String(ev.content || '') && (
+                                <p className="text-xs text-muted-foreground mt-0.5">{truncate(String(ev.content), 150)}</p>
+                              )}
+                            </div>
+                            {String(ev.url || '') && externalUrl(String(ev.url)) && (
+                              <a href={ev.url as string} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1">
+                                <Link2 className="h-3 w-3" />
+                                Visit source
+                              </a>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Type: {String(ev.evidence_type || 'unknown')}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card>
+                  <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                    No evidence items collected yet.
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                <HelpCircle className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                Company evidence not available. This may mean no research has been conducted yet, or the evidence endpoint is not accessible.
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </TabsList>
       </div>

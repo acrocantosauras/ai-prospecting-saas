@@ -8,7 +8,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.api.v1.endpoints import business_profile, icp, batches, prospects, exports
+from app.api.v1.endpoints import (
+    auth,
+    business_profile,
+    icp,
+    batches,
+    prospects,
+    exports,
+    engine,
+    workspaces,
+)
 from app.core import init_db
 
 settings = get_settings()
@@ -53,11 +62,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
+app.include_router(workspaces.router, prefix="/api/v1/workspaces", tags=["Workspaces"])
 app.include_router(business_profile.router, prefix="/api/v1/business-profile", tags=["Business Profile"])
 app.include_router(icp.router, prefix="/api/v1/icp", tags=["ICP"])
 app.include_router(batches.router, prefix="/api/v1/batches", tags=["Batches"])
 app.include_router(prospects.router, prefix="/api/v1/prospects", tags=["Prospects"])
 app.include_router(exports.router, prefix="/api/v1/exports", tags=["Exports"])
+app.include_router(engine.router, prefix="/api/v1/engine", tags=["Engine"])
 
 
 @app.get("/health")

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { getICPProfiles, getICPProfile, createICPProfile, updateICPProfile, ApiError } from '@/lib/api';
+import { useWorkspaceSlug } from '@/lib/hooks/useAuth';
 import { TopBar } from '@/components/ui/topbar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -9,7 +10,6 @@ import { Input, Textarea, Label, Select } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/toast';
 import { SkeletonPage } from '@/components/ui/skeleton';
-import { WORKSPACE_SLUG } from '@/lib/hooks/useApi';
 import { formatDate, cn } from '@/lib/utils';
 import { Save, Plus } from 'lucide-react';
 import type { ICPProfile } from '@/lib/types';
@@ -64,11 +64,13 @@ export default function ICPPage() {
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
 
+  const slug = useWorkspaceSlug();
+
   const loadICPs = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getICPProfiles(WORKSPACE_SLUG);
+      const data = await getICPProfiles(slug);
       setIcpProfiles(data || []);
       setCreating(false);
     } catch (e) {
@@ -76,11 +78,11 @@ export default function ICPPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [slug]);
 
   useEffect(() => {
     let cancelled = false;
-    getICPProfiles(WORKSPACE_SLUG)
+    getICPProfiles(slug)
       .then(data => {
         if (cancelled) return;
         const list = data || [];
@@ -124,7 +126,7 @@ export default function ICPPage() {
 
   const selectIcp = async (id: string) => {
     try {
-      const data = await getICPProfile(id, WORKSPACE_SLUG);
+      const data = await getICPProfile(id, slug);
       setSelectedIcp(data);
       setSelectedId(id);
       if (data) {
@@ -207,7 +209,7 @@ export default function ICPPage() {
     setSaving(true);
     try {
       const payload = {
-        workspace_id: WORKSPACE_SLUG,
+        workspace_id: slug,
         name: form.name,
         target_industries: form.target_industries || null,
         sub_industries: form.sub_industries || null,
@@ -236,14 +238,14 @@ export default function ICPPage() {
         for (const [k, v] of Object.entries(payload)) {
           if (k !== 'workspace_id') (updatePayload as Record<string, unknown>)[k] = v;
         }
-        result = await updateICPProfile(selectedId, updatePayload, WORKSPACE_SLUG);
+        result = await updateICPProfile(selectedId, updatePayload, slug);
         toast.addToast({ type: 'success', title: 'ICP updated' });
       } else {
         throw new Error('No ICP selected');
       }
 
       setSelectedIcp(result);
-      const updated = await getICPProfiles(WORKSPACE_SLUG);
+      const updated = await getICPProfiles(slug);
       setIcpProfiles(updated || []);
       setMode('read');
     } catch (e) {

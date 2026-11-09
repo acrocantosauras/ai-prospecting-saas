@@ -36,6 +36,8 @@ class ProspectBatch(Base):
     total_researched: Mapped[int] = mapped_column(default=0, nullable=False)
     total_enriched: Mapped[int] = mapped_column(default=0, nullable=False)
     total_qualified: Mapped[int] = mapped_column(default=0, nullable=False)
+    total_rejected: Mapped[int] = mapped_column(default=0, nullable=False)
+    total_discovered_companies: Mapped[int] = mapped_column(default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_mode: Mapped[str] = mapped_column(String(32), default="demo", nullable=False)
     requested_prospect_count: Mapped[int] = mapped_column(default=20, nullable=False)

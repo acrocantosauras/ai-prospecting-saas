@@ -2,16 +2,21 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getHealth, getBatches, getProspects, getCurrentWorkspace, ApiError } from '@/lib/api';
+import { useAuth, useWorkspaceSlug } from '@/lib/hooks/useAuth';
+import { getHealth, getBatches, getProspects, getCurrentWorkspace, logout as apiLogout, ApiError } from '@/lib/api';
 import { TopBar } from '@/components/ui/topbar';
 import { Button } from '@/components/ui/button';
 import { DashboardStats } from '@/components/dashboard/dashboard-stats';
 import { SkeletonPage } from '@/components/ui/skeleton';
-import { WORKSPACE_SLUG } from '@/lib/hooks/useApi';
+import { useToast } from '@/components/ui/toast';
+import { LogOut } from 'lucide-react';
 import type { Prospect, ProspectBatch } from '@/lib/types';
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { selectedWorkspaceSlug, selectedWorkspace, workspaces, setWorkspace, loading: authLoading } = useAuth();
+  const slug = useWorkspaceSlug();
+  const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [batches, setBatches] = useState<ProspectBatch[]>([]);
@@ -21,13 +26,17 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function load() {
+      if (!slug) {
+        setLoading(false);
+        return;
+      }
       try {
         const healthData = await getHealth();
         setHealth(healthData);
-        const workspaceData = await getCurrentWorkspace(WORKSPACE_SLUG);
+        const workspaceData = await getCurrentWorkspace(slug);
         setBatches(workspaceData.batches);
         const prospectData = await getProspects({
-          workspaceSlug: WORKSPACE_SLUG,
+          workspaceSlug: slug,
           pageSize: 100,
           sortBy: 'created_at',
           sortOrder: 'desc',
@@ -45,7 +54,7 @@ export default function DashboardPage() {
       }
     }
     load();
-  }, []);
+  }, [slug]);
 
   const qualified = prospects.filter(p => p.is_ready_for_outreach === true).length;
   const companies = new Set<string>();
@@ -60,7 +69,7 @@ export default function DashboardPage() {
   const emailUnavailable = prospects.filter(p => !p.email).length;
   const emailUnverified = Math.max(0, prospects.length - emailVerified - emailUnavailable);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="flex flex-col min-h-screen">
         <SkeletonPage />
@@ -104,11 +113,40 @@ export default function DashboardPage() {
     <div className="flex flex-col min-h-screen">
       <TopBar
         title="Overview"
-        subtitle={`${WORKSPACE_SLUG === 'demo' ? 'Demo Workspace — Northbridge Growth Partners' : WORKSPACE_SLUG}`}
+        subtitle={selectedWorkspace ? `${selectedWorkspace.name} — ${selectedWorkspace.slug}` : 'Select a workspace'}
         actions={
-          <Button onClick={() => router.push('/prospecting')}>
-            Start Prospecting
-          </Button>
+          <div className="flex items-center gap-2">
+            {workspaces.length > 1 && (
+              <select
+                className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+                value={selectedWorkspaceSlug ?? ''}
+                onChange={(e) => { if (e.target.value) setWorkspace(e.target.value); else setWorkspace(workspaces[0]?.slug ?? ''); }}
+                disabled={loading || authLoading}
+              >
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.slug}>{w.name}</option>
+                ))}
+              </select>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                try {
+                  await apiLogout();
+                  window.location.href = '/login';
+                } catch (e) {
+                  toast.addToast({ type: 'error', title: 'Logout failed', description: e instanceof ApiError ? e.message : 'Could not log out' });
+                }
+              }}
+            >
+              <LogOut className="h-4 w-4 mr-1" />
+              Sign out
+            </Button>
+            <Button onClick={() => router.push('/prospecting')} disabled={!slug || loading}>
+              Start Prospecting
+            </Button>
+          </div>
         }
       />
       <div className="p-6 space-y-6 max-w-7xl">

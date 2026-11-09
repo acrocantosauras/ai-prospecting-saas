@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { ToastProvider } from '@/components/ui/toast';
 import { Sidebar } from '@/components/ui/sidebar';
+import { AuthProvider } from '@/lib/hooks/useAuth';
 import './globals.css';
 
 const inter = Inter({
@@ -27,12 +28,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
       <body className="min-h-full flex">
-        <Sidebar />
-        <ToastProvider>
-          <main className="flex-1 min-w-0 flex flex-col pt-14 lg:pt-0 lg:pl-64">
-            {children}
-          </main>
-        </ToastProvider>
+        <AuthProvider>
+          <ToastProvider>
+            <Sidebar />
+            <main className="flex-1 min-w-0 flex flex-col pt-14 lg:pt-0 lg:pl-64">
+              {children}
+            </main>
+          </ToastProvider>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -3,6 +3,10 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useAuth } from '@/lib/hooks/useAuth';
+import { logout } from '@/lib/api';
+import { ApiError } from '@/lib/api/client';
+import { useToast } from '@/components/ui/toast';
 import {
   LayoutDashboard,
   Briefcase,
@@ -13,6 +17,8 @@ import {
   Zap,
   Menu,
   X,
+  LogOut,
+  User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -29,6 +35,9 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = React.useState(false);
+  const { user, workspaces, selectedWorkspaceSlug, selectedWorkspace, setWorkspace } = useAuth();
+  const toast = useToast();
+  const currentWs = selectedWorkspace ?? workspaces[0] ?? null;
 
   const renderLinks = (onNavigate?: () => void) => navItems.map(item => {
     const isActive =
@@ -63,9 +72,9 @@ export function Sidebar() {
               <path d="M12 6v6l4 2" />
             </svg>
           </div>
-          <div>
-            <p className="text-sm font-semibold leading-none">Prospector</p>
-            <p className="text-[10px] text-muted-foreground leading-tight">AI Prospecting SaaS</p>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-none truncate">Prospector</p>
+            <p className="text-[10px] text-muted-foreground leading-tight truncate">AI Prospecting SaaS</p>
           </div>
         </div>
 
@@ -74,19 +83,62 @@ export function Sidebar() {
           {renderLinks()}
         </nav>
 
-        {/* Footer */}
-        <div className="border-t border-border p-4">
-          <div className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500 text-[10px] font-bold text-white">
-              NP
+        {/* Session info / workspace selector / logout */}
+        <div className="border-t border-border p-4 space-y-3">
+          {user?.email && (
+            <div className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2">
+              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
+                {user.display_name?.[0]?.toUpperCase() ?? user.email[0]?.toUpperCase() ?? '?'}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium truncate">{user.display_name ?? user.email}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{user.email}</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="text-xs font-medium truncate">Demo Workspace</p>
-              <p className="text-[10px] text-muted-foreground truncate">Northbridge Growth Partners</p>
+          )}
+          {workspaces.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[10px] uppercase text-muted-foreground px-1">Workspace</p>
+              {workspaces.length > 1 ? (
+                <select
+                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                  value={selectedWorkspaceSlug ?? workspaces[0]?.slug ?? ''}
+                  onChange={(e) => { if (e.target.value) setWorkspace(e.target.value); else setWorkspace(workspaces[0]?.slug ?? ''); }}
+                >
+                  {workspaces.map((w) => (
+                    <option key={w.id} value={w.slug}>{w.name}</option>
+                  ))}
+                </select>
+              ) : currentWs ? (
+                <div className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2">
+                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500 text-[10px] font-bold text-white">
+                    {currentWs.name[0]?.toUpperCase() ?? '?'}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium truncate">{currentWs.name}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{currentWs.slug}</p>
+                  </div>
+                </div>
+              ) : null}
             </div>
-          </div>
-          <p className="mt-2 text-[10px] text-muted-foreground text-center">
-            Synthetic demo mode — no real data
+          )}
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await logout();
+                window.location.href = '/login';
+              } catch (e) {
+                toast.addToast({ type: 'error', title: 'Logout failed', description: e instanceof ApiError ? e.message : 'Could not log out' });
+              }
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <LogOut className="h-3.5 w-3.5 shrink-0" />
+            Sign out
+          </button>
+          <p className="text-[10px] text-muted-foreground text-center">
+            Synthetic demo — no real data
           </p>
         </div>
       </aside>

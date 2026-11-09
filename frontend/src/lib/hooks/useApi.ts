@@ -1,25 +1,34 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useAuth } from './useAuth';
 import { getBatches, getBatch, getProspects, ApiError } from '@/lib/api';
 import type { ProspectBatch, ProspectList } from '@/lib/types';
 
-const WORKSPACE_SLUG = 'demo';
 const MAX_POLL_ATTEMPTS = 150; // ~5 minutes at 2s intervals
 
-async function fetchBatchList(): Promise<ProspectBatch[]> {
-  const data = await getBatches(WORKSPACE_SLUG);
-  return data.items || [];
+/** Resolve the current workspace slug from auth context. Must be called inside a React component or hook. */
+export function useWorkspaceSlugFromAuth(): string {
+  const { selectedWorkspaceSlug, selectedWorkspace, workspaces } = useAuth();
+  return selectedWorkspaceSlug ?? selectedWorkspace?.slug ?? workspaces[0]?.slug ?? 'unknown';
 }
 
+/** Resolve the current workspace slug from auth context. Must be called inside a React component or hook. */
 export function useBatches() {
+  const slug = useWorkspaceSlugFromAuth();
   const [batches, setBatches] = useState<ProspectBatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  async function fetchBatchList(s: string): Promise<ProspectBatch[]> {
+    if (s === 'unknown') return [];
+    const data = await getBatches(s);
+    return data.items || [];
+  }
+
   const refresh = useCallback(async () => {
     try {
-      const list = await fetchBatchList();
+      const list = await fetchBatchList(slug);
       setBatches(list);
       setError(null);
     } catch (e) {
@@ -29,7 +38,7 @@ export function useBatches() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchBatchList()
+    fetchBatchList(slug)
       .then(list => {
         if (cancelled) return;
         setBatches(list);
@@ -126,7 +135,13 @@ export function useBatchPoll({
     inFlightRef.current = true;
     attemptsRef.current += 1;
     try {
-      const found = await getBatch(id, WORKSPACE_SLUG);
+      const slug = useWorkspaceSlugFromAuth();
+      if (slug === 'unknown') {
+        setError('No workspace selected');
+        setLoading(false);
+        return;
+      }
+      const found = await getBatch(id, slug);
       if (idRef.current !== id) return;
       setBatch(found);
       setError(null);
@@ -214,11 +229,19 @@ export function useProspectSearch(params: {
   // Derived: a request is in flight whenever the loaded snapshot is stale.
   const loading = loadedKey !== queryKey;
 
+  const slug = useWorkspaceSlugFromAuth();
+
   useEffect(() => {
     let cancelled = false;
     const key = queryKey;
+    if (slug === 'unknown') {
+      setError('No workspace selected');
+      setData(null);
+      setLoadedKey(key);
+      return;
+    }
     getProspects({
-      workspaceSlug: WORKSPACE_SLUG,
+      workspaceSlug: slug,
       batchId,
       search: search || undefined,
       industry: industry || undefined,
@@ -281,5 +304,3 @@ export function useProspectSearch(params: {
     resetPage,
   };
 }
-
-export { WORKSPACE_SLUG };

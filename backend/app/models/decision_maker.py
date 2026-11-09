@@ -29,6 +29,16 @@ class DecisionMaker(Base):
     job_title: Mapped[str | None] = mapped_column(String(256), nullable=True)
     professional_profile_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     profile_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    email_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    profile_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    role_source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    synthetic: Mapped[bool] = mapped_column(default=False, nullable=True)
     is_primary: Mapped[bool] = mapped_column(default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

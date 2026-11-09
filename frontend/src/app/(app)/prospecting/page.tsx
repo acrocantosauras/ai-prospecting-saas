@@ -2,7 +2,16 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getBatches, getICPProfiles, getClientProfiles, createBatch, ApiError } from '@/lib/api';
+import {
+  getBatches,
+  getICPProfiles,
+  getClientProfiles,
+  createBatch,
+  getBatchProgress,
+  getQualifications,
+  ApiError,
+} from '@/lib/api';
+import { useWorkspaceSlug } from '@/lib/hooks/useAuth';
 import { TopBar } from '@/components/ui/topbar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -11,11 +20,12 @@ import { Badge } from '@/components/ui/badge';
 import { Modal } from '@/components/ui/modal';
 import { useToast } from '@/components/ui/toast';
 import { SkeletonTable, SkeletonCard } from '@/components/ui/skeleton';
-import { useLatestBatch, useBatchPoll, WORKSPACE_SLUG } from '@/lib/hooks/useApi';
+import { useLatestBatch, useBatchPoll } from '@/lib/hooks/useApi';
 import { STAGE_LABELS, STAGE_DESCRIPTIONS, type ProspectBatch, type ProspectBatchCreate, type BatchStage } from '@/lib/types';
 import { cn, formatDate } from '@/lib/utils';
 import { Play, CheckCircle2, XCircle, Loader2, AlertCircle } from 'lucide-react';
 import type { ClientProfile, ICPProfile } from '@/lib/types';
+import { BatchExecutionView } from '@/components/batch/BatchExecutionView';
 
 const STAGE_ORDER: BatchStage[] = [
   'configured',
@@ -44,9 +54,10 @@ export default function ProspectingPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Active batch poll state
+  // Active batch engine state
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
-  const { batch, loading, error, start: startPoll, stop: stopPoll } = useBatchPoll({
+  const [engineLoading, setEngineLoading] = useState(false);
+  const { batch: polledBatch, loading: polledLoading, error: polledError, start: startPoll, stop: stopPoll } = useBatchPoll({
     onComplete: (completed) => {
       toast.addToast({ type: 'success', title: 'Prospecting complete', description: `${completed.total_qualified} prospects qualified.` });
       refreshBatches();
@@ -54,13 +65,15 @@ export default function ProspectingPage() {
     onError: (err) => {
       toast.addToast({ type: 'error', title: 'Prospecting failed', description: err });
     },
-    intervalMs: 2000,
+    intervalMs: 3000,
   });
+
+  const slug = useWorkspaceSlug();
 
   // Load ICPs and client profiles for the creation form, plus recent batches.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getICPProfiles(WORKSPACE_SLUG), getClientProfiles(WORKSPACE_SLUG)])
+    Promise.all([getICPProfiles(slug), getClientProfiles(slug)])
       .then(([icpData, clientData]) => {
         if (cancelled) return;
         setIcps(icpData || []);
@@ -72,6 +85,34 @@ export default function ProspectingPage() {
     refreshBatches();
     return () => { cancelled = true; };
   }, [refreshBatches]);
+
+  // Refresh engine progress when active batch changes  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (!activeBatchId || !slug) return;
+    let cancelled = false;
+    const id = setInterval(async () => {
+      if (cancelled || !slug) return;
+      try {
+        const data = await getBatchProgress(activeBatchId, slug);
+        if (!cancelled) setEngineLoading(false);
+        if (data.batch.status === 'completed' || data.batch.status === 'failed') {
+          clearInterval(id);
+          if (data.batch.status === 'completed') {
+            toast.addToast({ type: 'success', title: 'Prospecting complete', description: `${data.batch.total_qualified} prospects qualified.` });
+          } else {
+            toast.addToast({ type: 'error', title: 'Prospecting failed', description: data.batch.error_message || 'Pipeline failed.' });
+          }
+          refreshBatches();
+        }
+      } catch (e) {
+        // Silently retry
+      }
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [activeBatchId, slug, refreshBatches]);
 
   const isFormValid = () => {
     const count = parseInt(prospectCount, 10);
@@ -100,7 +141,7 @@ export default function ProspectingPage() {
         return;
       }
       const payload: ProspectBatchCreate = {
-        workspace_id: WORKSPACE_SLUG,
+        workspace_id: slug,
         icp_profile_id: selectedIcpId,
         client_profile_id: selectedClientProfileId,
         name: batchName.trim(),
@@ -110,6 +151,7 @@ export default function ProspectingPage() {
 
       setActiveBatchId(data.id);
       startPoll(data.id);
+      setEngineLoading(true);
       toast.addToast({ type: 'success', title: 'Batch created', description: 'Pipeline starting…' });
       setShowForm(false);
       setSubmitting(false);
@@ -129,7 +171,7 @@ export default function ProspectingPage() {
 
   const closeActiveBatch = () => {
     setActiveBatchId(null);
-    stopPoll();
+    stopPoll?.();
   };
 
   if (batchLoading) {
@@ -144,7 +186,7 @@ export default function ProspectingPage() {
     );
   }
 
-  const activeBatch = activeBatchId ? batch : null;
+  const activeBatch = activeBatchId ? polledBatch : null;
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -167,20 +209,16 @@ export default function ProspectingPage() {
             )}
           </div>
         }
-      />
-
-      <div className="p-6 space-y-6 max-w-5xl">
+      />      <div className="p-6 space-y-6 max-w-5xl">
         <div role="note" className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-800">
           Synthetic demo data only. Company details and research are illustrative, not verified or live.
         </div>
 
-        {/* Active batch view */}
-        {activeBatch ? (
-          <ActiveBatchView
-            batch={activeBatch}
-            error={error}
+        {/* Active batch view — real engine progress */}
+        {activeBatchId ? (
+          <BatchExecutionView
+            batchId={activeBatchId}
             onClose={closeActiveBatch}
-            stageOrder={STAGE_ORDER}
           />
         ) : (
           <>
@@ -231,9 +269,7 @@ export default function ProspectingPage() {
               </Card>
             )}
           </>
-        )}
-
-      </div>        {/* Creation modal */}
+        )}</div>        {/* Creation modal */}
       <Modal
         open={showForm || submitting}
         onClose={handleCancelForm}
@@ -344,235 +380,5 @@ export default function ProspectingPage() {
         </form>
       </Modal>
     </div>
-  );
-}
-
-function ActiveBatchView({
-  batch,
-  error,
-  onClose,
-  stageOrder,
-}: {
-  batch: ProspectBatch;
-  error: string | null;
-  onClose: () => void;
-  stageOrder: BatchStage[];
-}) {
-  const currentStageIndex = batch.current_stage
-    ? stageOrder.indexOf(batch.current_stage)
-    : stageOrder.indexOf('configured');
-
-  const progressPct = batch.status === 'completed'
-    ? 100
-    : currentStageIndex >= 0
-    ? (currentStageIndex / (stageOrder.length - 1)) * 100
-    : 0;
-
-  const stages = stageOrder.map((stage, idx) => {
-    const isCompleted = idx < currentStageIndex || batch.status === 'completed';
-    const isCurrent = idx === currentStageIndex && batch.status !== 'completed';
-    const isFailed = error !== null && idx === currentStageIndex;
-    return { stage, idx, label: STAGE_LABELS[stage], description: STAGE_DESCRIPTIONS[stage], isCompleted, isCurrent, isFailed };
-  });
-
-  return (
-    <div className="space-y-6">
-      {/* Batch header */}
-      <Card className="border-l-4 border-l-primary">
-        <CardContent className="p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">Active Batch</p>
-              <p className="text-lg font-semibold mt-0.5">{batch.name}</p>
-              <div className="flex items-center gap-2 mt-1.5">
-                <Badge variant={batch.status === 'completed' ? 'success' : batch.status === 'failed' ? 'destructive' : 'info'}>
-                  {batch.status}
-                </Badge>
-                {batch.current_stage && (
-                  <span className="text-sm text-muted-foreground">
-                    Stage: {STAGE_LABELS[batch.current_stage]}
-                  </span>
-                )}
-                <span className="text-sm text-muted-foreground">{formatDate(batch.created_at)}</span>
-              </div>
-              {error && (
-                <p className="text-sm text-red-600 mt-1">{error}</p>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{batch.total_qualified}</span>
-                <span>/ {batch.requested_prospect_count} qualified</span>
-              </div>
-              <Button variant="outline" size="sm" onClick={onClose}>
-                <XCircle className="h-4 w-4 mr-1.5" />
-                Close
-              </Button>
-            </div>
-          </div>
-
-          {/* Progress bar */}
-          <div className="mt-4">
-            <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-              <span>Progress</span>
-              <span>{Math.round(progressPct)}%</span>
-            </div>
-            <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
-              <div
-                className="h-full bg-primary transition-all duration-700 ease-out"
-                style={{ width: `${progressPct}%` }}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Stage timeline */}
-      <Card>
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base">Pipeline Stages</CardTitle>
-          <CardDescription>The synthetic demo pipeline moves through these stages automatically.</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="divide-y divide-border">
-            {stages.map((s, idx) => {
-              const Icon = s.isCompleted
-                ? CheckCircle2
-                : s.isFailed
-                ? XCircle
-                : s.isCurrent
-                ? Loader2
-                : null;
-
-              return (
-                <div
-                  key={s.stage}
-                  className={cn(
-                    'flex items-start gap-4 px-5 py-4',
-                    idx < stages.length - 1 && 'border-b border-border/60',
-                  )}
-                >
-                  {/* Stage number / icon */}
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors">
-                    {s.isCompleted && (
-                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-500 text-white">
-                        <CheckCircle2 className="h-5 w-5" />
-                      </div>
-                    )}
-                    {s.isFailed && (
-                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-red-500 text-white">
-                        <XCircle className="h-5 w-5" />
-                      </div>
-                    )}
-                    {s.isCurrent && (
-                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-white">
-                        <Loader2 className="h-5 w-5 animate-spin" />
-                      </div>
-                    )}
-                    {!s.isCompleted && !s.isFailed && !s.isCurrent && (
-                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted">
-                        <span className="text-xs font-semibold text-muted-foreground">{idx + 1}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Content */}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className={cn(
-                        'font-medium',
-                        !s.isCompleted && 'text-muted-foreground',
-                        s.isCurrent && 'text-primary',
-                      )}>
-                        {s.label}
-                      </span>
-                      {s.isCompleted && (
-                        <Badge variant="success" className="text-[10px] px-1.5 py-0">Done</Badge>
-                      )}
-                      {s.isFailed && (
-                        <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Failed</Badge>
-                      )}
-                      {s.isCurrent && !s.isCompleted && !s.isFailed && (
-                        <Badge variant="info" className="text-[10px] px-1.5 py-0">In progress</Badge>
-                      )}
-                    </div>
-                    <p className={cn(
-                      'text-sm mt-0.5',
-                      !s.isCompleted && 'text-muted-foreground',
-                    )}>
-                      {s.description}
-                    </p>
-                  </div>
-
-                  {/* Stage connector */}
-                  {idx < stages.length - 1 && (
-                    <div className="flex flex-col items-center">
-                      <div className={cn(
-                        'h-0.5 w-full transition-colors',
-                        s.isCompleted ? 'bg-green-400' : 'bg-border',
-                      )} />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-4 gap-4">
-        <StatCard label="Discovered" value={batch.total_discovered} color="primary" />
-        <StatCard label="Researched" value={batch.total_researched} color="info" />
-        <StatCard label="Enriched" value={batch.total_enriched} color="warning" />
-        <StatCard label="Qualified" value={batch.total_qualified} color="success" />
-      </div>
-
-      {/* Source mode */}
-      <Card className="border-border/50">
-        <CardContent className="py-3 px-5 flex items-center gap-3">
-          <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-            <svg className="h-4 w-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z" />
-              <path d="M12 6v6l4 2" />
-            </svg>
-          </div>
-          <div>
-            <p className="text-sm font-medium">Source Mode: {batch.source_mode}</p>
-            <p className="text-xs text-muted-foreground">
-              {batch.source_mode === 'demo'
-                ? 'Synthetic demo data generated by the prospecting engine. No real profiles or emails are used.'
-                : 'Configured data source mode.'}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
-  const colorMap: Record<string, string> = {
-    primary: 'bg-primary/10 text-primary',
-    info: 'bg-blue-50 text-blue-600',
-    warning: 'bg-amber-50 text-amber-600',
-    success: 'bg-green-50 text-green-600',
-  };
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-center gap-2">
-          <div className={cn('rounded-lg p-1.5', colorMap[color])}>
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 12h-4l-3 9L9 3l-3 9H2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-semibold">{value}</p>
-            <p className="text-xs text-muted-foreground">{label}</p>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
   );
 }

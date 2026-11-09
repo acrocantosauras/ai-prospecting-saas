@@ -45,6 +45,9 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*.py" = ["D"]
+# Engine exceptions are domain names exposed to callers and tests; renaming
+# them to *Error would make the public contract noisier.
+"app/engine/errors.py" = ["N818"]
 
 [tool.mypy]
 python_version = "3.12"

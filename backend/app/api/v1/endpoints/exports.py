@@ -1,33 +1,43 @@
-"""Export API endpoints: CSV and Google Sheets export for Outreach handoff."""
+"""Export API endpoints: CSV and Google Sheets export for Outreach handoff.
+
+The workspace comes from the authenticated membership; a batch from another
+workspace returns 404 and the CSV contract stays exactly the 11-column Outreach
+format.
+"""
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from sqlalchemy.orm import Session
 
+from app.auth.dependencies import WorkspaceCtx, ensure_permission
+from app.auth.permissions import Permission
 from app.config import get_settings
 from app.core.database import get_db
-from app.models import Prospect, Workspace, ProspectBatch
-from app.services.exports import build_lead_rows, validate_lead_row, format_csv
+from app.models import Prospect, ProspectBatch, Workspace
+from app.services.exports import build_lead_rows, format_csv, validate_lead_row
 
 router = APIRouter()
 
-
-def _get_workspace(db, workspace_slug: str) -> Workspace:
-    ws = db.query(Workspace).filter(Workspace.slug == workspace_slug).first()
-    if not ws:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
-    return ws
+DbSession = Annotated[Session, Depends(get_db)]
 
 
-def _get_batch(db, batch_id: uuid.UUID, workspace: Workspace) -> ProspectBatch:
+def _get_batch(db: Session, batch_id: uuid.UUID, workspace: Workspace) -> ProspectBatch:
+    """Return a batch from this workspace, or raise 404."""
     batch = (
         db.query(ProspectBatch)
-        .filter(ProspectBatch.id == batch_id, ProspectBatch.workspace_id == workspace.id)
+        .filter(
+            ProspectBatch.id == batch_id,
+            ProspectBatch.workspace_id == workspace.id,
+        )
         .first()
     )
     if not batch:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found"
+        )
     return batch
 
 
@@ -35,23 +45,31 @@ def _exportable_prospects(batch: ProspectBatch, include_all: bool) -> list[Prosp
     """Ready prospects by default; every prospect when explicitly requested.
 
     Prospects are never invented or padded: if only 12 of 100 qualify, only 12
-    rows are exported.
+    rows are exported. Demo/illustrative rows and synthetic records are excluded
+    from the default (production) export path and require ``include_all=true``.
     """
     prospects = list(batch.prospects)
     if not include_all:
-        prospects = [p for p in prospects if p.is_ready_for_outreach is True]
+        prospects = [
+            p
+            for p in prospects
+            if p.is_ready_for_outreach is True
+            and p.qualification_status != "qualified_illustrative"
+            and p.synthetic is not True
+        ]
     return prospects
 
 
 @router.get("/csv/{batch_id}")
 def export_csv(
     batch_id: uuid.UUID,
-    workspace_slug: str,
+    ctx: WorkspaceCtx,
+    db: DbSession,
     include_all: bool = Query(False, alias="include_all"),
-    db=Depends(get_db),
-):
+) -> Response:
     """Download prospects from a batch as a CSV in the Outreach Leads tab format."""
-    workspace = _get_workspace(db, workspace_slug)
+    ensure_permission(ctx, Permission.EXPORT_PROSPECTS)
+    workspace = ctx.workspace
     batch = _get_batch(db, batch_id, workspace)
     prospects = _exportable_prospects(batch, include_all)
     if not prospects:
@@ -77,12 +95,13 @@ def export_csv(
 @router.get("/preview/{batch_id}")
 def export_preview(
     batch_id: uuid.UUID,
-    workspace_slug: str,
+    ctx: WorkspaceCtx,
+    db: DbSession,
     include_all: bool = Query(False, alias="include_all"),
-    db=Depends(get_db),
-):
+) -> dict:
     """Return lead rows as JSON for preview/debugging."""
-    workspace = _get_workspace(db, workspace_slug)
+    ensure_permission(ctx, Permission.EXPORT_PROSPECTS)
+    workspace = ctx.workspace
     batch = _get_batch(db, batch_id, workspace)
     prospects = _exportable_prospects(batch, include_all)
     rows = build_lead_rows(prospects, str(workspace.id), str(batch.id))
@@ -92,23 +111,28 @@ def export_preview(
 @router.post("/google-sheets/{batch_id}")
 def export_to_google_sheets(
     batch_id: uuid.UUID,
-    workspace_slug: str,
+    ctx: WorkspaceCtx,
+    db: DbSession,
     include_all: bool = Query(False, alias="include_all"),
-    db=Depends(get_db),
-):
+) -> dict:
     """Push lead rows to the configured Google Sheets Leads tab.
 
     Requires GOOGLE_SHEETS_ENABLED=true and valid credentials configured.
     This path has not been exercised against a live sheet in this repo.
+
+    Batch ownership and workspace visibility are validated before the
+    configuration check so cross-tenant access always returns 404 rather than
+    leaking that another tenant's batch exists or that Sheets is configured.
     """
+    ensure_permission(ctx, Permission.EXPORT_PROSPECTS)
+    workspace = ctx.workspace
+    batch = _get_batch(db, batch_id, workspace)
     s = get_settings()
     if not s.is_google_sheets_configured:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Google Sheets integration is not configured. Set GOOGLE_SHEETS_ENABLED=true and provide credentials.",
         )
-    workspace = _get_workspace(db, workspace_slug)
-    batch = _get_batch(db, batch_id, workspace)
     prospects = _exportable_prospects(batch, include_all)
     if not prospects:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No prospects available for export")
