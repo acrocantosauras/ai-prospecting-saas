@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import WorkspaceCtx, ensure_permission
 from app.auth.permissions import Permission
 from app.core.database import get_db
-from app.models import Prospect, ProspectBatch, Workspace
+from app.engine.freshness import FreshnessThresholds
+from app.models import (
+    CompanyResearchRecord,
+    Prospect,
+    ProspectBatch,
+    Workspace,
+)
 from app.schemas.prospect import (
     ProspectDetailResponse,
     ProspectListResponse,
@@ -74,6 +80,53 @@ def _quality_filters(
     return clauses
 
 
+def _freshness_thresholds() -> FreshnessThresholds:
+    from app.config import get_settings
+    from app.engine.freshness import FreshnessThresholds
+
+    settings = get_settings()
+    return FreshnessThresholds(
+        company_identity_days=settings.freshness_company_identity_days,
+        company_services_days=settings.freshness_company_services_days,
+        decision_maker_days=settings.freshness_decision_maker_days,
+        email_verification_days=settings.freshness_email_verification_days,
+        social_marketing_days=settings.freshness_social_marketing_days,
+    )
+
+
+def _enrich_prospect_freshness(db: Session, prospect: Prospect) -> None:
+    """Attach derived freshness fields without changing persisted state."""
+    record = None
+    if prospect.company_id:
+        record = (
+            db.query(CompanyResearchRecord)
+            .filter(CompanyResearchRecord.company_id == prospect.company_id)
+            .order_by(CompanyResearchRecord.last_successful_at.desc().nullslast(), CompanyResearchRecord.research_timestamp.desc())
+            .first()
+        )
+    prospect.research_status = record.research_status if record else None
+    prospect.research_last_successful_at = (
+        record.last_successful_at if record and record.last_successful_at else (record.research_timestamp if record else None)
+    )
+    dm = prospect.decision_maker
+    prospect.decision_maker_status = getattr(dm, "status", None) if dm is not None else None
+    from app.engine.freshness import FreshnessState, evaluate_freshness
+
+    thresholds = _freshness_thresholds()
+    research_ts = prospect.research_last_successful_at
+    state = evaluate_freshness(
+        research_ts,
+        max_age_days=thresholds.company_services_days,
+        category="company_services",
+    ).state
+    prospect.refresh_needed = state in (
+        FreshnessState.STALE,
+        FreshnessState.EXPIRED,
+        FreshnessState.UNKNOWN,
+        FreshnessState.UNAVAILABLE,
+    )
+
+
 def get_prospect_or_404(db: Session, prospect_id: uuid.UUID, workspace: Workspace) -> Prospect:
     """Return a prospect that belongs to this workspace, or raise 404."""
     prospect = (
@@ -130,6 +183,8 @@ def list_prospects(
     query = query.order_by(sort_column.desc() if sort_order == "desc" else sort_column.asc())
     offset = (page - 1) * page_size
     items = query.offset(offset).limit(page_size).all()
+    for item in items:
+        _enrich_prospect_freshness(db, item)
     return ProspectListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -142,6 +197,7 @@ def get_prospect_detail(
     """Return full prospect detail including evidence and verification."""
     ensure_permission(ctx, Permission.VIEW_WORKSPACE)
     prospect = get_prospect_or_404(db, prospect_id, ctx.workspace)
+    _enrich_prospect_freshness(db, prospect)
     company_data = None
     decision_maker_data = None
     if prospect.company:
@@ -163,6 +219,18 @@ def get_prospect_detail(
             "source_url": prospect.company.source_url,
             "source_name": prospect.company.source_name,
         }
+        # Attach the latest research status/timestamps for freshness visibility.
+        latest_record = (
+            db.query(CompanyResearchRecord)
+            .filter(CompanyResearchRecord.company_id == prospect.company.id)
+            .order_by(CompanyResearchRecord.last_successful_at.desc().nullslast(), CompanyResearchRecord.research_timestamp.desc())
+            .first()
+        )
+        if latest_record is not None:
+            company_data["research_status"] = latest_record.research_status
+            company_data["research_last_attempted_at"] = latest_record.last_attempted_at
+            company_data["research_last_successful_at"] = latest_record.last_successful_at or latest_record.research_timestamp
+            company_data["research_error"] = latest_record.error_message
     if prospect.decision_maker:
         dm = prospect.decision_maker
         decision_maker_data = {
@@ -174,9 +242,23 @@ def get_prospect_detail(
             "professional_profile_url": dm.professional_profile_url,
             "profile_source": dm.profile_source,
             "is_primary": dm.is_primary,
+            "status": dm.status,
+            "last_observed_at": dm.last_observed_at,
+            "observation_confidence": dm.observation_confidence,
+            "evidence_excerpt": dm.evidence_excerpt,
         }
     evidence = [
-        {"id": e.id, "label": e.label, "url": e.url, "content": e.content, "evidence_type": e.evidence_type}
+        {
+            "id": e.id,
+            "label": e.label,
+            "url": e.url,
+            "content": e.content,
+            "evidence_type": e.evidence_type,
+            "retrieved_at": e.retrieved_at,
+            "publication_date": e.publication_date,
+            "is_accessible": e.is_accessible,
+            "verification_status": e.verification_status,
+        }
         for e in prospect.evidence_items
     ]
     enrichment = [

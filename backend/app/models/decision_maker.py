@@ -1,9 +1,9 @@
 """Decision maker model."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, func
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,10 +11,13 @@ from app.core.database import Base
 
 
 def new_id():
+    """Return a new UUID."""
     return uuid.uuid4()
 
 
 class DecisionMaker(Base):
+    """Decision-maker model."""
+
     __tablename__ = "decision_makers"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -38,6 +41,7 @@ class DecisionMaker(Base):
         DateTime(timezone=True), nullable=True
     )
     role_source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    evidence_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
     synthetic: Mapped[bool] = mapped_column(default=False, nullable=True)
     is_primary: Mapped[bool] = mapped_column(default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -49,8 +53,16 @@ class DecisionMaker(Base):
         onupdate=func.now(),
         nullable=False,
     )
+    status: Mapped[str] = mapped_column(String(32), default="SOURCE_SUPPORTED", nullable=False)
+    last_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    observation_confidence: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
 
     company = relationship("Company", backref="decision_makers")
 
     def __repr__(self) -> str:
+        """Return a debugging representation."""
         return f"<DecisionMaker id={self.id} name={self.full_name} role={self.job_title}>"

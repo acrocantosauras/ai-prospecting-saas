@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 
 class ProspectBase(BaseModel):
+    """Base prospect fields."""
+
     first_name: str | None = Field(None, max_length=128)
     model_config = {"from_attributes": True}
     last_name: str | None = Field(None, max_length=128)
@@ -35,12 +37,16 @@ class ProspectBase(BaseModel):
 
 
 class ProspectCreate(ProspectBase):
+    """Prospect creation payload."""
+
     batch_id: uuid.UUID
     company_id: uuid.UUID | None = None
     decision_maker_id: uuid.UUID | None = None
 
 
 class ProspectUpdate(BaseModel):
+    """Prospect update payload."""
+
     research_summary: str | None = None
     business_problem: str | None = None
     problem_evidence: str | None = None
@@ -54,12 +60,18 @@ class ProspectUpdate(BaseModel):
 
 
 class ProspectResponse(ProspectBase):
+    """Prospect response payload."""
+
     id: uuid.UUID
     batch_id: uuid.UUID
     company_id: uuid.UUID | None
     decision_maker_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    research_status: str | None = None
+    research_last_successful_at: datetime | None = None
+    decision_maker_status: str | None = None
+    refresh_needed: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -67,6 +79,8 @@ class ProspectResponse(ProspectBase):
 
 
 class ProspectListResponse(BaseModel):
+    """Paginated prospect list."""
+
     items: list[ProspectResponse]
     total: int
     page: int
@@ -74,6 +88,8 @@ class ProspectListResponse(BaseModel):
 
 
 class ProspectDetailResponse(ProspectResponse):
+    """Detailed prospect payload."""
+
     company: dict | None = None
     decision_maker: dict | None = None
     evidence: list[dict] = []

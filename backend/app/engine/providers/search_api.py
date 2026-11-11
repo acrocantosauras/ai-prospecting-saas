@@ -13,11 +13,8 @@ internal host, private IP or metadata endpoint can never be stored as a source.
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
 
 from app.config.settings import Settings
 from app.engine.contracts import (
@@ -38,8 +35,14 @@ from app.engine.errors import (
     ProviderTimeout,
     ProviderUnavailable,
 )
-from app.engine.evidence import is_plausible_source_url, is_public_hostname
+from app.engine.evidence import is_plausible_source_url
 from app.engine.normalization import normalize_domain
+from app.engine.safe_http import (
+    SafeHttpError,
+    SafeHttpResponse,
+    UnsafeUrlError,
+    safe_request,
+)
 
 ENDPOINTS = {
     "tavily": "https://api.tavily.com/search",
@@ -88,37 +91,6 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 3
 
 
-class _PublicHttpsRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Only follow redirects that stay on HTTPS and a public host."""
-
-    max_redirections = MAX_REDIRECTS
-    max_repeats = 2
-
-    def redirect_request(
-        self, req, fp, code, msg, headers, newurl
-    ):  # noqa: ANN001, ANN201 - urllib signature
-        parsed = urlparse(newurl or "")
-        if parsed.scheme != "https" or not is_public_hostname(parsed.hostname or ""):
-            raise ProviderResponseError(
-                "search API redirect to a non-public or non-HTTPS target was blocked"
-            )
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-_OPENER = urllib.request.build_opener(_PublicHttpsRedirectHandler)
-
-
-def _read_body(response) -> str:  # noqa: ANN001 - http.client.HTTPResponse
-    """Read at most ``MAX_RESPONSE_BYTES`` and decode as UTF-8."""
-    raw = response.read(MAX_RESPONSE_BYTES + 1)
-    if len(raw) > MAX_RESPONSE_BYTES:
-        raise ProviderResponseError("search API response exceeded the size limit")
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ProviderResponseError("search API returned non-UTF-8 content") from exc
-
-
 @dataclass(frozen=True)
 class SearchHit:
     """A normalized search result."""
@@ -128,9 +100,7 @@ class SearchHit:
     snippet: str
 
 
-class SearchApiProvider(
-    CompanyDiscoveryProvider, CompanyResearchProvider, EvidenceProvider
-):
+class SearchApiProvider(CompanyDiscoveryProvider, CompanyResearchProvider, EvidenceProvider):
     """Tavily/Serper adapter implementing discovery, research and evidence."""
 
     synthetic = False
@@ -146,9 +116,7 @@ class SearchApiProvider(
         """Store credentials; raise immediately when they are missing."""
         resolved = (provider or "").lower()
         if resolved not in ENDPOINTS:
-            raise ProviderNotConfigured(
-                f"Unsupported search provider '{provider}'. Supported: tavily, serper."
-            )
+            raise ProviderNotConfigured(f"Unsupported search provider '{provider}'. Supported: tavily, serper.")
         if not api_key:
             raise ProviderNotConfigured(
                 f"{resolved} search API key is not configured "
@@ -165,9 +133,7 @@ class SearchApiProvider(
     def from_settings(cls, settings: Settings) -> SearchApiProvider:
         """Build the adapter from application settings."""
         provider = (settings.search_provider or "").lower()
-        api_key = (
-            settings.tavily_api_key if provider == "tavily" else settings.serper_api_key
-        )
+        api_key = settings.tavily_api_key if provider == "tavily" else settings.serper_api_key
         return cls(
             provider=provider,
             api_key=api_key,
@@ -182,10 +148,7 @@ class SearchApiProvider(
             capability=self.capability,
             state="ready",
             synthetic=False,
-            detail=(
-                "Documented search API only; results are retrieval evidence, not "
-                "fact-checked claims."
-            ),
+            detail=("Documented search API only; results are retrieval evidence, not fact-checked claims."),
             cost_per_call_usd=self.cost_per_call_usd,
         )
 
@@ -229,9 +192,7 @@ class SearchApiProvider(
         """Retrieve first-party pages and turn them into research findings."""
         domain = normalize_domain(company.domain or company.website)
         if not domain:
-            raise ProviderResponseError(
-                f"cannot research '{company.name}' without a resolvable domain"
-            )
+            raise ProviderResponseError(f"cannot research '{company.name}' without a resolvable domain")
         hits = self._search(
             f"site:{domain} (about OR services OR products OR pricing OR customers)",
             max_results=8,
@@ -274,9 +235,7 @@ class SearchApiProvider(
         if not domain:
             return []
         hits = self._search(f"site:{domain}", max_results=5)
-        return [
-            _source_ref(hit) for hit in hits if is_plausible_source_url(hit.url)
-        ]
+        return [_source_ref(hit) for hit in hits if is_plausible_source_url(hit.url)]
 
     def _search(self, query: str, *, max_results: int) -> list[SearchHit]:
         """POST to the configured search API and normalize its results."""
@@ -298,35 +257,50 @@ class SearchApiProvider(
         return _parse_hits(self._provider, data)
 
 
-def _post_json(
-    url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float
-) -> dict[str, Any]:
-    """POST JSON using the standard library and map failures to engine errors."""
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
+def _request_search_api(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> SafeHttpResponse:
+    """POST JSON using only pinned HTTPS and same-origin redirects."""
     try:
-        with _OPENER.open(request, timeout=timeout) as response:  # noqa: S310
-            body = _read_body(response)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            raise ProviderRateLimited(f"search API rate limit hit ({exc.code})") from exc
-        if exc.code in (401, 403):
-            raise ProviderNotConfigured(
-                f"search API rejected the configured credentials ({exc.code})"
-            ) from exc
-        raise ProviderResponseError(
-            f"search API returned HTTP {exc.code}"
-        ) from exc
+        return safe_request(
+            url,
+            method="POST",
+            body=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            timeout=timeout,
+            max_redirects=MAX_REDIRECTS,
+            max_response_bytes=MAX_RESPONSE_BYTES,
+            require_https=True,
+            same_origin_only=True,
+        )
+    except UnsafeUrlError as exc:
+        raise ProviderResponseError("search API request or redirect was blocked by the safe network policy") from exc
     except TimeoutError as exc:
         raise ProviderTimeout("search API request timed out") from exc
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, TimeoutError):
-            raise ProviderTimeout("search API request timed out") from exc
-        raise ProviderUnavailable(f"search API is unreachable: {exc.reason}") from exc
+    except SafeHttpError as exc:
+        raise ProviderUnavailable("search API request could not be completed safely") from exc
+    except OSError as exc:
+        raise ProviderUnavailable("search API is unreachable") from exc
+
+
+def _raise_for_search_response(response: SafeHttpResponse) -> None:
+    """Map API status and size failures to their established provider errors."""
+    if response.status_code == 429:
+        raise ProviderRateLimited(f"search API rate limit hit ({response.status_code})")
+    if response.status_code in (401, 403):
+        raise ProviderNotConfigured(f"search API rejected the configured credentials ({response.status_code})")
+    if response.status_code < 200 or response.status_code >= 300:
+        raise ProviderResponseError(f"search API returned HTTP {response.status_code}")
+    if response.body_truncated:
+        raise ProviderResponseError("search API response exceeded the size limit")
+
+
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+    """POST JSON over HTTPS using the pinned-address redirect-safe transport."""
+    response = _request_search_api(url, payload, headers, timeout)
+    _raise_for_search_response(response)
+    try:
+        body = response.body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProviderResponseError("search API returned non-UTF-8 content") from exc
     try:
         parsed = json.loads(body)
     except json.JSONDecodeError as exc:
@@ -347,14 +321,10 @@ def _parse_hits(provider: str, data: dict[str, Any]) -> list[SearchHit]:
         raise ProviderResponseError("search API returned an error payload")
     key = "results" if provider == "tavily" else "organic"
     if key not in data:
-        raise ProviderResponseError(
-            f"search API response is missing the '{key}' field"
-        )
+        raise ProviderResponseError(f"search API response is missing the '{key}' field")
     raw_results = data.get(key)
     if not isinstance(raw_results, list):
-        raise ProviderResponseError(
-            f"search API field '{key}' is not a list"
-        )
+        raise ProviderResponseError(f"search API field '{key}' is not a list")
     hits: list[SearchHit] = []
     for item in raw_results:
         if not isinstance(item, dict):

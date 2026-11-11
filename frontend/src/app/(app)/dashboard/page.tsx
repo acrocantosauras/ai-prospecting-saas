@@ -3,14 +3,15 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, useWorkspaceSlug } from '@/lib/hooks/useAuth';
-import { getHealth, getBatches, getProspects, getCurrentWorkspace, logout as apiLogout, ApiError } from '@/lib/api';
+import { getHealth, getBatches, getProspects, getCurrentWorkspace, getDemoReadiness, logout as apiLogout, ApiError } from '@/lib/api';
 import { TopBar } from '@/components/ui/topbar';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DashboardStats } from '@/components/dashboard/dashboard-stats';
 import { SkeletonPage } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { LogOut } from 'lucide-react';
-import type { Prospect, ProspectBatch } from '@/lib/types';
+import type { Prospect, ProspectBatch, DemoReadiness } from '@/lib/types';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -23,6 +24,7 @@ export default function DashboardPage() {
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [total, setTotal] = useState(0);
   const [health, setHealth] = useState<{ status: string } | null>(null);
+  const [demoReadiness, setDemoReadiness] = useState<DemoReadiness | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -43,6 +45,12 @@ export default function DashboardPage() {
         });
         setProspects(prospectData.items || []);
         setTotal(prospectData.total || 0);
+        try {
+          const dr = await getDemoReadiness(slug);
+          setDemoReadiness(dr);
+        } catch {
+          // Demo readiness is optional for the overview.
+        }
       } catch (e) {
         if (e instanceof ApiError) {
           setError(`Backend unavailable (${e.status}). ${e.message}`);
@@ -170,6 +178,36 @@ export default function DashboardPage() {
           recentProspects={prospects}
           loading={false}
         />
+
+        {demoReadiness && (
+          <Card className="mt-4">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Demo Readiness</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div><p className="text-muted-foreground">Total prospects</p><p className="font-semibold">{demoReadiness.total_prospects}</p></div>
+                <div><p className="text-muted-foreground">Fresh</p><p className="font-semibold">{demoReadiness.fresh_prospects}</p></div>
+                <div><p className="text-muted-foreground">Aging</p><p className="font-semibold">{demoReadiness.aging_prospects}</p></div>
+                <div><p className="text-muted-foreground">Stale</p><p className="font-semibold">{demoReadiness.stale_prospects}</p></div>
+                <div><p className="text-muted-foreground">Incomplete</p><p className="font-semibold">{demoReadiness.incomplete_prospects}</p></div>
+                <div><p className="text-muted-foreground">DM fresh evidence</p><p className="font-semibold">{demoReadiness.decision_makers_with_fresh_evidence}</p></div>
+                <div><p className="text-muted-foreground">Broken sources</p><p className="font-semibold">{demoReadiness.broken_source_urls}</p></div>
+                <div><p className="text-muted-foreground">Demo ready</p><p className="font-semibold">{demoReadiness.demo_ready ? 'Yes' : 'No'}</p></div>
+              </div>
+              {demoReadiness.qualification_blockers?.length > 0 && (
+                <div className="mt-3 text-xs text-muted-foreground">
+                  <p className="font-medium">Qualification blockers:</p>
+                  <ul className="list-disc ml-4">
+                    {demoReadiness.qualification_blockers.map((b: string, i: number) => (
+                      <li key={i}>{b}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   );

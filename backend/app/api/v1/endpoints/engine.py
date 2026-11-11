@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -477,7 +478,13 @@ def get_company_evidence(
         .first()
     )
     evidence = db.query(Evidence).filter(Evidence.company_id == company.id).all()
+    decision_makers = (
+        db.query(DecisionMaker)
+        .filter(DecisionMaker.company_id == company.id)
+        .all()
+    )
     research: dict[str, Any] | None = None
+    freshness = None
     if record is not None:
         research = {
             "provider": record.provider,
@@ -491,7 +498,35 @@ def get_company_evidence(
             "confidence": record.confidence,
             "synthetic": record.synthetic,
             "research_timestamp": record.research_timestamp,
+            "last_attempted_at": record.last_attempted_at,
+            "last_successful_at": record.last_successful_at,
+            "research_status": record.research_status,
+            "error_message": record.error_message,
         }
+        from app.config import get_settings
+        from app.engine.freshness import (
+            FreshnessThresholds,
+            evaluate_company_freshness,
+        )
+
+        settings = get_settings()
+        thresholds = FreshnessThresholds(
+            company_identity_days=settings.freshness_company_identity_days,
+            company_services_days=settings.freshness_company_services_days,
+            decision_maker_days=settings.freshness_decision_maker_days,
+            email_verification_days=settings.freshness_email_verification_days,
+            social_marketing_days=settings.freshness_social_marketing_days,
+        )
+        dm_observed = max(
+            (dm.last_observed_at for dm in decision_makers if dm.last_observed_at is not None),
+            default=None,
+        )
+        freshness = evaluate_company_freshness(
+            research_retrieved_at=record.last_successful_at or record.research_timestamp,
+            decision_maker_retrieved_at=dm_observed,
+            thresholds=thresholds,
+            source_unavailable=record.research_status == "failed",
+        )
     return CompanyEvidenceResponse(
         company_id=company.id,
         company_name=company.name,
@@ -502,9 +537,13 @@ def get_company_evidence(
                 "url": row.url,
                 "content": row.content,
                 "evidence_type": row.evidence_type,
+                "retrieved_at": row.retrieved_at,
+                "publication_date": row.publication_date,
+                "is_accessible": row.is_accessible,
             }
             for row in evidence
         ],
+        freshness=freshness,
     )
 
 
@@ -546,3 +585,196 @@ def get_usage(
     """Return measured provider usage and derived unit costs."""
     ensure_permission(ctx, Permission.VIEW_WORKSPACE)
     return _usage_summary(db, ctx.workspace.id, batch_id)
+
+
+@router.get("/demo-readiness")
+def get_demo_readiness(  # noqa: C901
+    ctx: WorkspaceCtx,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Report whether the current workspace has demo-ready prospects."""
+    ensure_permission(ctx, Permission.VIEW_WORKSPACE)
+    workspace = ctx.workspace
+    settings = get_settings()
+    from app.engine.freshness import (
+        FreshnessThresholds,
+        evaluate_demo_readiness,
+        evaluate_freshness,
+    )
+
+    thresholds = FreshnessThresholds(
+        company_identity_days=settings.freshness_company_identity_days,
+        company_services_days=settings.freshness_company_services_days,
+        decision_maker_days=settings.freshness_decision_maker_days,
+        email_verification_days=settings.freshness_email_verification_days,
+        social_marketing_days=settings.freshness_social_marketing_days,
+    )
+    prospects = (
+        db.query(Prospect)
+        .join(ProspectBatch, Prospect.batch_id == ProspectBatch.id)
+        .filter(ProspectBatch.workspace_id == workspace.id)
+        .all()
+    )
+    freshness_states: list[str] = []
+    for prospect in prospects:
+        record = None
+        if prospect.company_id:
+            record = (
+                db.query(CompanyResearchRecord)
+                .filter(CompanyResearchRecord.company_id == prospect.company_id)
+                .order_by(CompanyResearchRecord.research_timestamp.desc())
+                .first()
+            )
+        research_ts = None
+        if record is not None:
+            research_ts = record.last_successful_at or record.research_timestamp
+        state = evaluate_freshness(
+            research_ts,
+            max_age_days=thresholds.company_services_days,
+            category="company_services",
+        ).state.value
+        freshness_states.append(state)
+
+    dm_fresh = 0
+    now = datetime.now(UTC)
+    for dm in db.query(DecisionMaker).join(Company, DecisionMaker.company_id == Company.id).join(ProspectBatch, Company.batch_id == ProspectBatch.id).filter(ProspectBatch.workspace_id == workspace.id).all():
+        parsed = dm.last_observed_at
+        if parsed is not None and (now - (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC))).total_seconds() <= thresholds.decision_maker_days * 86400:
+            dm_fresh += 1
+
+    broken_urls = db.query(Evidence).join(ProspectBatch, Evidence.company_id == Company.id).filter(Evidence.is_accessible.is_(False)).count() if False else 0
+    # Simpler: count inaccessible evidence for this workspace's companies.
+    company_ids = [p.company_id for p in prospects if p.company_id]
+    broken_urls = 0
+    if company_ids:
+        broken_urls = (
+            db.query(Evidence)
+            .filter(Evidence.company_id.in_(company_ids), Evidence.is_accessible.is_(False))
+            .count()
+        )
+
+    blockers: list[str] = []
+    for prospect in prospects:
+        if prospect.qualification_status not in ("qualified", "qualified_illustrative"):
+            if prospect.qualification_reasons:
+                blockers.append(f"{prospect.company_name}: {prospect.qualification_reasons}")
+    blockers = blockers[:20]
+
+    last_refresh = None
+    if company_ids:
+        latest = (
+            db.query(CompanyResearchRecord)
+            .filter(CompanyResearchRecord.company_id.in_(company_ids))
+            .order_by(CompanyResearchRecord.last_successful_at.desc().nullslast())
+            .first()
+        )
+        last_refresh = (latest.last_successful_at if latest and latest.last_successful_at else (latest.research_timestamp if latest else None))
+
+    report = evaluate_demo_readiness(
+        prospects=[{"id": str(p.id)} for p in prospects],
+        freshness_states=freshness_states,
+        decision_maker_fresh_count=dm_fresh,
+        broken_source_urls=broken_urls,
+        qualification_blockers=blockers,
+        last_successful_refresh=last_refresh,
+    )
+    return report.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Single-company research refresh
+# ---------------------------------------------------------------------------
+
+_REFRESH_LOCK_MARKER = None
+
+
+@router.post("/companies/{company_id}/refresh")
+def refresh_company(
+    company_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    ctx: WorkspaceCtx,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Queue a safe research refresh for one company."""
+    ensure_permission(ctx, Permission.RUN_BATCHES)
+    workspace = ctx.workspace
+    company = _company_or_404(db, company_id, workspace)
+    from app.engine.refresh import is_refresh_running, mark_refresh_started
+
+    if is_refresh_running(str(company_id)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A refresh is already running for this company",
+        )
+    # Also guard against a persisted running refresh (e.g. after a restart).
+    running_record = (
+        db.query(CompanyResearchRecord)
+        .filter(
+            CompanyResearchRecord.company_id == company.id,
+            CompanyResearchRecord.research_status == "running",
+        )
+        .first()
+    )
+    if running_record is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A refresh is already running for this company",
+        )
+    if not mark_refresh_started(str(company_id)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A refresh is already running for this company",
+        )
+    background_tasks.add_task(
+        _run_refresh_task, str(company.id), str(workspace.id)
+    )
+    return {
+        "status": "queued",
+        "company_id": str(company.id),
+        "message": "Research refresh queued. Poll refresh-status for progress.",
+    }
+
+
+def _run_refresh_task(company_id: str, workspace_id: str) -> None:
+    from app.engine.refresh import run_company_refresh
+
+    try:
+        run_company_refresh(company_id, workspace_id)
+    finally:
+        from app.engine.refresh import mark_refresh_finished
+
+        mark_refresh_finished(company_id)
+
+
+@router.get("/companies/{company_id}/refresh-status")
+def get_refresh_status(
+    company_id: uuid.UUID,
+    ctx: WorkspaceCtx,
+    db: DbSession,
+) -> dict[str, Any]:
+    """Return the latest refresh/research status for a company."""
+    ensure_permission(ctx, Permission.VIEW_WORKSPACE)
+    workspace = ctx.workspace
+    company = _company_or_404(db, company_id, workspace)
+    from app.engine.refresh import latest_refresh_status
+
+    record = latest_refresh_status(db, str(company.id))
+    if record is None:
+        return {
+            "company_id": str(company.id),
+            "status": "never_run",
+            "last_attempted_at": None,
+            "last_successful_at": None,
+            "error_message": None,
+            "research_status": None,
+        }
+    return {
+        "company_id": str(company.id),
+        "status": record.research_status or "unknown",
+        "last_attempted_at": record.last_attempted_at,
+        "last_successful_at": record.last_successful_at,
+        "research_timestamp": record.research_timestamp,
+        "error_message": record.error_message,
+        "research_status": record.research_status,
+        "is_running": record.research_status == "running",
+    }

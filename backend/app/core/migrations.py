@@ -13,6 +13,15 @@ from sqlalchemy.engine import Engine
 # table -> list of (column, SQL type) that must exist. Types are intentionally
 # portable across SQLite (dev) and PostgreSQL (deployed).
 ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "company_research_records": [
+        ("last_attempted_at", "TIMESTAMP"),
+        ("last_successful_at", "TIMESTAMP"),
+        ("research_status", "VARCHAR(32)"),
+        ("research_version", "INTEGER"),
+        ("content_fingerprint", "VARCHAR(128)"),
+        ("error_message", "TEXT"),
+        ("decision_maker_extracted_at", "TIMESTAMP"),
+    ],
     "companies": [
         ("domain", "VARCHAR(255)"),
         ("normalized_name", "VARCHAR(255)"),
@@ -21,11 +30,15 @@ ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("synthetic", "BOOLEAN"),
     ],
     "decision_makers": [
+        ("status", "VARCHAR(32)"),
+        ("last_observed_at", "TIMESTAMP"),
+        ("observation_confidence", "FLOAT"),
         ("email", "VARCHAR(512)"),
         ("email_status", "VARCHAR(32)"),
         ("email_verified_at", "TIMESTAMP"),
         ("profile_verified_at", "TIMESTAMP"),
         ("role_source_url", "VARCHAR(512)"),
+        ("evidence_excerpt", "TEXT"),
         ("synthetic", "BOOLEAN"),
     ],
     "prospects": [
@@ -33,6 +46,13 @@ ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("qualification_confidence", "FLOAT"),
         ("evidence_urls", "TEXT"),
         ("synthetic", "BOOLEAN"),
+    ],
+    "evidence": [
+        ("retrieved_at", "TIMESTAMP"),
+        ("publication_date", "TIMESTAMP"),
+        ("verification_status", "VARCHAR(32)"),
+        ("content_fingerprint", "VARCHAR(128)"),
+        ("is_accessible", "BOOLEAN"),
     ],
     "prospect_batches": [
         ("total_rejected", "INTEGER"),

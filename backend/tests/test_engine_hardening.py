@@ -42,10 +42,7 @@ from app.engine.providers.dns_verifier import (  # noqa: E402
     DomainLookup,
 )
 from app.engine.providers.search_api import (  # noqa: E402
-    MAX_RESPONSE_BYTES,
     _parse_hits,
-    _PublicHttpsRedirectHandler,
-    _read_body,
     _source_ref,
 )
 from app.engine.qualification import (  # noqa: E402
@@ -54,6 +51,7 @@ from app.engine.qualification import (  # noqa: E402
     QualificationPolicy,
     evaluate,
 )
+from app.engine.safe_http import UnsafeUrlError, safe_request  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     ClientProfile,
@@ -164,11 +162,7 @@ def test_stale_running_batch_is_reclaimed(client, seeded):
 
     db = SessionLocal()
     try:
-        batch = (
-            db.query(ProspectBatch)
-            .filter(ProspectBatch.id == uuid.UUID(batch_id))
-            .one()
-        )
+        batch = db.query(ProspectBatch).filter(ProspectBatch.id == uuid.UUID(batch_id)).one()
         # The stale claim succeeded and the pipeline actually ran.
         assert batch.status == "completed"
         assert len(batch.stage_runs) > 0
@@ -176,34 +170,15 @@ def test_stale_running_batch_is_reclaimed(client, seeded):
         db.close()
 
 
-def test_response_size_is_capped():
-    class _HugeResponse:
-        def read(self, size):
-            return b"x" * (MAX_RESPONSE_BYTES + 1)
-
-    with pytest.raises(ProviderResponseError):
-        _read_body(_HugeResponse())
-
-    class _OkResponse:
-        def read(self, size):
-            return b'{"results": []}'
-
-    assert _read_body(_OkResponse()) == '{"results": []}'
-
-
 def test_redirects_to_internal_or_plain_http_are_blocked():
-    import urllib.request
-
-    handler = _PublicHttpsRedirectHandler()
-    request = urllib.request.Request("https://api.tavily.com/search")
     for target in (
         "http://api.tavily.com/search",
         "https://169.254.169.254/latest/meta-data/",
         "https://metadata.google.internal/x",
         "https://localhost/admin",
     ):
-        with pytest.raises(ProviderResponseError):
-            handler.redirect_request(request, None, 302, "Found", {}, target)
+        with pytest.raises(UnsafeUrlError):
+            safe_request(target, require_https=True)
 
 
 def test_dns_lookup_skipped_for_internal_domains():
@@ -249,11 +224,7 @@ def test_concurrent_run_guard_does_not_double_process(client, seeded):
 
     db = SessionLocal()
     try:
-        batch = (
-            db.query(ProspectBatch)
-            .filter(ProspectBatch.id == uuid.UUID(batch_id))
-            .one()
-        )
+        batch = db.query(ProspectBatch).filter(ProspectBatch.id == uuid.UUID(batch_id)).one()
         assert batch.status == "running"
         assert db.query(Prospect).filter(Prospect.batch_id == batch.id).count() == 0
     finally:

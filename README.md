@@ -43,6 +43,20 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
 Open `http://localhost:3000`. All pages use the `demo` workspace slug.
 
+### Resetting an existing local account password
+
+For local development only, reset an existing account's password with a
+hidden interactive prompt:
+
+```bash
+cd backend
+python -m app.auth.reset_password --email qa@example.com
+```
+
+The command requires the `development` environment and a local SQLite database.
+It does not create accounts or change workspace memberships or roles. Enter a
+new password of at least 12 characters twice when prompted; input is not echoed.
+
 ## Environment variables (backend)
 
 | Variable | Default | Purpose |

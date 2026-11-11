@@ -1,12 +1,13 @@
 """Application configuration from environment variables."""
 
 from functools import lru_cache
-from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Application configuration loaded from environment variables."""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -51,10 +52,18 @@ class Settings(BaseSettings):
     database_dir: str = "./data"
 
     # AI providers
-    ai_provider: str = "demo"
+    ai_provider: str = "demo"  # demo | openai | local | ollama | vllm
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"
+
+    # Local model runtime (Ollama / vLLM / any OpenAI-compatible server).
+    # No model is downloaded automatically; the operator must start the runtime
+    # and pull/load a model separately.
+    local_llm_enabled: bool = False
+    local_llm_provider: str = "ollama"  # ollama | vllm | openai_compatible
+    local_llm_base_url: str = "http://localhost:11434/v1"
+    local_llm_model: str = ""
 
     # Prospecting engine provider selection.
     # "demo" keeps the deterministic synthetic provider; "real" requires a
@@ -84,6 +93,14 @@ class Settings(BaseSettings):
     qualification_excluded_name_keywords: str = ""
     qualification_allowed_countries: str = ""
 
+    # Research freshness thresholds (days)
+    freshness_company_identity_days: int = 7
+    freshness_company_services_days: int = 14
+    freshness_decision_maker_days: int = 14
+    freshness_email_verification_days: int = 7
+    freshness_social_marketing_days: int = 7
+    freshness_aging_ratio: float = 1.0
+
     # Cost controls (usage is always measured, even when a provider is free)
     batch_cost_budget_usd: float = 2.0
     cost_search_call_usd: float = 0.008
@@ -92,6 +109,14 @@ class Settings(BaseSettings):
     cost_email_verification_usd: float = 0.0
     discovery_oversample_factor: int = 3
     discovery_max_candidates: int = 300
+
+    # Multi-source discovery (comma-separated URLs; optional, no credentials)
+    discovery_customer_urls: str = ""
+    discovery_directory_urls: str = ""
+    discovery_association_urls: str = ""
+    discovery_event_urls: str = ""
+    discovery_request_min_interval_seconds: float = 1.0
+    discovery_max_retries: int = 2
 
     # Google Sheets
     google_sheets_enabled: bool = False
@@ -115,7 +140,18 @@ class Settings(BaseSettings):
         return self.ai_provider == "openai" and bool(self.openai_api_key)
 
     @property
+    def is_local_llm_configured(self) -> bool:
+        """Return True when a local model runtime is explicitly configured."""
+        provider = (self.ai_provider or "").lower()
+        if provider not in ("local", "ollama", "vllm", "openai_compatible"):
+            return False
+        if not self.local_llm_enabled:
+            return False
+        return bool(self.local_llm_base_url and self.local_llm_model)
+
+    @property
     def is_google_sheets_configured(self) -> bool:
+        """Return True when Google Sheets export is configured."""
         return bool(
             self.google_sheets_enabled
             and self.google_credentials_path
@@ -125,6 +161,7 @@ class Settings(BaseSettings):
 
 @lru_cache
 def settings() -> Settings:
+    """Return the cached application settings."""
     return Settings()
 
 
@@ -132,4 +169,5 @@ settings_instance = settings()
 
 
 def get_settings() -> Settings:
+    """Return the cached application settings."""
     return settings()

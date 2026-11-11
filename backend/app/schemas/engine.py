@@ -155,3 +155,4 @@ class CompanyEvidenceResponse(BaseModel):
     company_name: str
     research: dict[str, Any] | None
     evidence: list[dict[str, Any]]
+    freshness: dict[str, Any] | None = None

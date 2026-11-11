@@ -35,7 +35,6 @@ from app.engine.contracts import (  # noqa: E402
     CompanyCandidate,
     CompanyResearch,
     DecisionMakerCandidate,
-    DiscoveryRequest,
     ICPQuery,
     ProblemFitAnalysis,
     ProviderDescriptor,
@@ -432,19 +431,28 @@ def test_completed_batch_cannot_be_cancelled(client, demo_batch):
     assert response.status_code == 400
 
 
-def test_real_mode_requires_configured_search_api(client, seeded):
+def test_real_mode_is_available_without_paid_search_api(client, seeded, monkeypatch):
+    from app.engine.providers import public_discovery
+
+    monkeypatch.setattr(
+        public_discovery.PublicSearchDiscoveryProvider,
+        "_fetch_search_results",
+        lambda self, query, max_results, timeout: [],
+    )
     response = client.post(
         "/api/v1/engine/batches/",
         json={
             "workspace_id": "engine-ws",
             "icp_profile_id": seeded["icp_profile_id"],
             "name": "Real batch without credentials",
-            "requested_prospect_count": 5,
+            "requested_prospect_count": 1,
             "mode": "real",
         },
     )
-    assert response.status_code == 400
-    assert "not configured" in response.json()["detail"].lower()
+    # Real mode no longer requires a paid search API: discovery runs through
+    # permitted public search interfaces. (Other capabilities may still be
+    # unconfigured, but discovery itself is available.)
+    assert response.status_code == 201, response.text
 
 
 def test_provider_overview_reports_capabilities(client, seeded):
@@ -465,7 +473,7 @@ def test_provider_overview_reports_capabilities(client, seeded):
 # --------------------------------------------------------------------------- #
 
 
-def test_real_bundle_reports_missing_credentials_without_network():
+def test_real_bundle_reports_local_discovery_without_paid_credentials():
     settings = Settings(
         _env_file=None,
         prospecting_mode="real",
@@ -474,16 +482,12 @@ def test_real_bundle_reports_missing_credentials_without_network():
     )
     bundle = build_provider_bundle(settings, mode="real")
     discovery = bundle.discovery.status()
-    assert discovery.state == "not_configured"
-    assert not discovery.available
-    assert "TAVILY_API_KEY" in (discovery.detail or "")
-    assert bundle.decision_makers.status().state == "not_configured"
+    assert discovery.state == "ready"
+    assert discovery.available
+    assert discovery.synthetic is False
+    assert bundle.decision_makers.status().state == "ready"
     assert bundle.enrichment.status().state == "not_configured"
     assert bundle.verification.status().state == "ready"
-    with pytest.raises(ProviderNotConfigured):
-        bundle.discovery.discover(
-            DiscoveryRequest(icp=ICPQuery(industries=["Technology"]), limit=5)
-        )
 
 
 def test_search_provider_requires_api_key():

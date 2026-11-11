@@ -220,7 +220,7 @@ export function useRequireAuth() {
     if (!checking) ready.current = true;
   }, [checking]);
 
-  if (!checking && (!session || workspaces.length === 0)) {
+  if (!checking && !session) {
     const search = typeof window !== 'undefined' ? window.location.search : '';
     const params = new URLSearchParams(search);
     params.delete('workspace_slug');

@@ -1,15 +1,34 @@
-"""Shared authentication fixtures for the API test suite.
+"""Shared test configuration and authentication fixtures.
 
-Fixtures import the application lazily: each test module configures its
-``DATABASE_URL`` before importing ``app``, so importing ``app`` at conftest
-import time would freeze the wrong settings.
+The suite must never touch the developer database. ``app.config.settings``
+caches ``Settings`` (including ``DATABASE_URL``) at import time and
+``app.core.database`` binds its engine at import time, so the URL has to be set
+before the first test module imports the application. Pytest imports
+``conftest.py`` before collection, which makes this the only reliable place:
+without it, ``tests/test_auth.py`` (collected first) imports ``app.main`` and
+freezes every later module onto ``backend/data/prospecting.db``, where the
+engine/hardening fixtures then collide with existing workspace slugs.
+
+Every test session therefore uses a brand-new SQLite file in a temporary
+directory. Test modules may still assign ``DATABASE_URL`` before importing the
+app when run individually; either way the database is disposable.
 """
 
+import os
+import tempfile
 import uuid
+from pathlib import Path
 
 import pytest
 
 DEFAULT_PASSWORD = "CorrectHorseBattery1"
+
+TEST_DATABASE_DIR = Path(tempfile.mkdtemp(prefix="abc-tests-"))
+TEST_DATABASE_URL = f"sqlite:///{(TEST_DATABASE_DIR / 'test.db').as_posix()}"
+
+# Always override rather than setdefault: an inherited DATABASE_URL is exactly
+# how a test run would end up writing to a developer or production database.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 
 def _unique_email(prefix: str) -> str:

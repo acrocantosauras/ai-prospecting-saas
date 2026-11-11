@@ -52,6 +52,7 @@ from app.engine.execution import (
     UsageEvent,
     UsageMeter,
 )
+from app.engine.freshness import content_fingerprint
 from app.engine.normalization import (
     normalize_company_name,
     normalize_domain,
@@ -246,6 +247,26 @@ def _build_context(
     resolved_bundle = bundle or build_provider_bundle(
         settings, mode=batch.source_mode
     )
+    # Bind tenant-scoped workspace history to the active database session.
+    try:
+        from app.engine.providers.multi_discovery import (
+            CompositeDiscoveryProvider,
+            WorkspaceHistoryDiscoveryProvider,
+            workspace_history_lookup,
+        )
+
+        def _history_lookup(workspace_id: Any, icp: ICPQuery, limit: int) -> list[CompanyCandidate]:
+            return workspace_history_lookup(
+                db, workspace_id, icp, limit
+            )
+
+        discovery = resolved_bundle.discovery
+        if isinstance(discovery, CompositeDiscoveryProvider):
+            discovery.set_history_lookup(_history_lookup)
+        elif isinstance(discovery, WorkspaceHistoryDiscoveryProvider):
+            discovery.set_lookup(_history_lookup)
+    except Exception:  # noqa: BLE001 - history reuse is optional
+        pass
     meter = UsageMeter(
         max_cost_usd=settings.batch_cost_budget_usd,
         listener=_usage_listener(db, batch.workspace_id, batch.id),
@@ -492,7 +513,11 @@ def _discover(ctx: RunContext, query: ICPQuery) -> list[CompanyCandidate]:
         ctx.settings.discovery_max_candidates,
         max(requested * ctx.settings.discovery_oversample_factor, requested),
     )
-    request = DiscoveryRequest(icp=query, limit=limit)
+    request = DiscoveryRequest(
+        icp=query,
+        limit=limit,
+        workspace_id=str(ctx.workspace.id),
+    )
     discovery = ctx.bundle.discovery
     candidates = ctx.runner.run(
         discovery,
@@ -920,6 +945,20 @@ def _persist_company(
             confidence=research.confidence,
             synthetic=research.synthetic,
             research_timestamp=research.researched_at,
+            last_attempted_at=utcnow(),
+            last_successful_at=research.researched_at,
+            research_status="success",
+            research_version=1,
+            content_fingerprint=content_fingerprint(
+                {
+                    "what_it_does": research.what_it_does,
+                    "what_it_sells": research.what_it_sells,
+                    "who_it_serves": research.who_it_serves,
+                    "positioning": research.positioning,
+                    "evidence": [s.url for s in research.evidence],
+                }
+            ),
+            decision_maker_extracted_at=None,
         )
     )
     for source in research.evidence:
@@ -930,6 +969,10 @@ def _persist_company(
                 url=source.url,
                 content=source.snippet,
                 evidence_type="company_research",
+                retrieved_at=source.retrieved_at,
+                verification_status="retrieved",
+                content_fingerprint=content_fingerprint(source.snippet or source.url),
+                is_accessible=True,
             )
         )
     ctx.db.commit()
@@ -1013,8 +1056,12 @@ def _persist_decision_maker(
             else None
         ),
         role_source_url=item.candidate.source_url,
+        evidence_excerpt=item.candidate.evidence_excerpt,
         is_primary=index == 0,
         synthetic=item.candidate.synthetic,
+        status="SOURCE_SUPPORTED",
+        last_observed_at=utcnow(),
+        observation_confidence=0.8,
     )
     ctx.db.add(row)
     ctx.db.flush()

@@ -124,6 +124,7 @@ class DecisionMakerCandidate(BaseModel):
     instagram_url: str | None = None
     profile_source: str | None = None
     source_url: str | None = None
+    evidence_excerpt: str | None = None
     role_priority: int = 100
     synthetic: bool = False
 
@@ -307,6 +308,8 @@ class DiscoveryRequest(BaseModel):
 
     icp: ICPQuery
     limit: int = Field(ge=1, le=300)
+    workspace_id: str | None = None
+    seed_urls: list[str] = Field(default_factory=list)
 
 
 class ProviderStatus(BaseModel):

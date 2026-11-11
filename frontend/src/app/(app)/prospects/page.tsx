@@ -352,6 +352,7 @@ function ProspectsPageContent() {
                         <th className="text-left text-xs font-medium text-muted-foreground px-4 py-3 w-10">#</th>
                         <th className="text-left text-xs font-medium text-muted-foreground px-4 py-3">Prospect</th>
                         <th className="text-left text-xs font-medium text-muted-foreground px-4 py-3">Company</th>
+                        <th className="text-left text-xs font-medium text-muted-foreground px-4 py-3 hidden xl:table-cell">Research</th>
                         <th className="text-left text-xs font-medium text-muted-foreground px-4 py-3 hidden md:table-cell">Role</th>
                         <th className="text-left text-xs font-medium text-muted-foreground px-4 py-3 hidden lg:table-cell">Email</th>
                         <th className="text-left text-xs font-medium text-muted-foreground px-4 py-3 w-20">Score</th>
@@ -396,6 +397,21 @@ function ProspectsPageContent() {
                                 </>
                               ) : (
                                 <span className="text-sm text-muted-foreground italic">—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 hidden xl:table-cell">
+                            <div className="flex flex-col gap-1">
+                              <Badge variant={p.refresh_needed ? 'warning' : 'success'} className="text-[10px] w-fit">
+                                {p.refresh_needed ? 'Refresh needed' : 'Fresh enough'}
+                              </Badge>
+                              <span className="text-[10px] text-muted-foreground">
+                                {p.research_last_successful_at ? formatDate(p.research_last_successful_at) : 'No research'}
+                              </span>
+                              {p.decision_maker_status && (
+                                <span className="text-[10px] text-muted-foreground">
+                                  DM: {p.decision_maker_status}
+                                </span>
                               )}
                             </div>
                           </td>

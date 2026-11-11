@@ -20,6 +20,7 @@ import type {
   QualificationDecision,
   ProspectVerification,
   CompanyEvidence,
+  DemoReadiness,
   ProviderOverview,
   UsageTotals,
 } from '@/lib/types';
@@ -309,6 +310,37 @@ export async function getCompanyEvidence(
   workspaceSlug: string,
 ): Promise<CompanyEvidence> {
   return fetcher(`/api/v1/engine/companies/${encodeURIComponent(companyId)}/evidence?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+
+/** Queue a safe research refresh for a company. */
+export async function refreshCompany(
+  companyId: string,
+  workspaceSlug: string,
+): Promise<{ status: string; company_id: string; message: string }> {
+  return fetcher(`/api/v1/engine/companies/${encodeURIComponent(companyId)}/refresh?workspace_slug=${encodeURIComponent(workspaceSlug)}`, {
+    method: 'POST',
+  });
+}
+
+/** Latest refresh status for a company. */
+export async function getCompanyRefreshStatus(
+  companyId: string,
+  workspaceSlug: string,
+): Promise<{
+  company_id: string;
+  status: string;
+  last_attempted_at: string | null;
+  last_successful_at: string | null;
+  research_timestamp: string | null;
+  error_message: string | null;
+  is_running: boolean;
+}> {
+  return fetcher(`/api/v1/engine/companies/${encodeURIComponent(companyId)}/refresh-status?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+
+/** Workspace demo-readiness report. */
+export async function getDemoReadiness(workspaceSlug: string): Promise<DemoReadiness> {
+  return fetcher(`/api/v1/engine/demo-readiness?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
 }
 
 /** Provider availability, capabilities and the active qualification policy. */

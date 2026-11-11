@@ -63,6 +63,19 @@ class CompanyResearchRecord(Base):
     research_timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    last_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_successful_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    research_status: Mapped[str] = mapped_column(String(32), default="success", nullable=False)
+    research_version: Mapped[int] = mapped_column(default=1, nullable=False)
+    content_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_maker_extracted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     company = relationship("Company", backref="research_records")
 

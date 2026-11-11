@@ -42,7 +42,7 @@ function LoginForm() {
     if (!email.trim()) {
       setEmailError('Email is required');
       ok = false;
-    } else if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email.trim())) {
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setEmailError('Enter a valid email address');
       ok = false;
     } else {

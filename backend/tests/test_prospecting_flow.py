@@ -15,9 +15,9 @@ os.environ["AI_PROVIDER"] = "demo"
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.main import app  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
-from app.models import Workspace, ClientProfile, ICPProfile  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import ClientProfile, ICPProfile, Workspace  # noqa: E402
 from app.schemas.exports import LeadExportRow  # noqa: E402
 from app.services.exports import format_csv  # noqa: E402
 

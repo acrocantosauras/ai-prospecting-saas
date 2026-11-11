@@ -7,7 +7,7 @@ import { useWorkspaceSlug } from '@/lib/hooks/useAuth';
 
 // This page is dynamic — prospect id is only known at request time.
 export const dynamic = 'force-dynamic';
-import { getProspect, getProspectVerification, getCompanyEvidence, ApiError } from '@/lib/api';
+import { getProspect, getProspectVerification, getCompanyEvidence, refreshCompany, getCompanyRefreshStatus, ApiError } from '@/lib/api';
 
 import { TopBar } from '@/components/ui/topbar';
 import { Button } from '@/components/ui/button';
@@ -30,6 +30,9 @@ export default function ProspectDetailPage() {
   const [prospect, setProspect] = useState<ProspectDetail | null>(null);
   const [verification, setVerification] = useState<ProspectVerification | null>(null);
   const [companyEvidence, setCompanyEvidence] = useState<CompanyEvidence | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshStatus, setRefreshStatus] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -91,6 +94,31 @@ export default function ProspectDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [prospectId, slug]);
+
+  const handleRefresh = async () => {
+    if (!slug || !prospect?.company?.id) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    setRefreshStatus('queued');
+    try {
+      await refreshCompany(prospect.company.id, slug);
+      // Poll bounded refresh status.
+      for (let i = 0; i < 120; i++) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const status = await getCompanyRefreshStatus(prospect.company.id, slug);
+        setRefreshStatus(status.status);
+        if (status.status === 'success' || status.status === 'failed') {
+          if (status.status === 'failed') setRefreshError(status.error_message || 'Refresh failed');
+          break;
+        }
+      }
+      await loadProspect();
+    } catch (e) {
+      setRefreshError(e instanceof ApiError ? e.message : 'Refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (loading && !prospect) {
     return (        <div className="flex-col min-h-screen">
@@ -165,6 +193,11 @@ export default function ProspectDetailPage() {
                 Company site
               </a>
             )}
+            {p.company?.id && (
+              <Button onClick={handleRefresh} loading={refreshing} disabled={refreshing} size="sm">
+                {refreshing ? 'Refreshing…' : 'Refresh research'}
+              </Button>
+            )}
           </div>
         }
       />
@@ -212,6 +245,55 @@ export default function ProspectDetailPage() {
                 <p className="text-xs text-muted-foreground mt-1">Qualification score</p>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Freshness & refresh status */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">Research Freshness</CardTitle>
+            <CardDescription>Timestamps come from persisted backend evidence, never from row updates.</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            <dl className="divide-y divide-border">
+              <div className="py-3 flex items-center justify-between">
+                <dt className="text-xs text-muted-foreground font-medium">Refresh status</dt>
+                <dd className="text-sm font-medium">
+                  {refreshStatus || p.research_status || 'unknown'}
+                  {refreshError && <span className="text-red-600 ml-2">{refreshError}</span>}
+                </dd>
+              </div>
+              <div className="py-3 flex items-center justify-between">
+                <dt className="text-xs text-muted-foreground font-medium">Last research attempt</dt>
+                <dd className="text-sm">{p.company?.research_last_attempted_at ? formatDate(p.company.research_last_attempted_at) : '—'}</dd>
+              </div>
+              <div className="py-3 flex items-center justify-between">
+                <dt className="text-xs text-muted-foreground font-medium">Last successful research</dt>
+                <dd className="text-sm">{p.company?.research_last_successful_at ? formatDate(p.company.research_last_successful_at) : '—'}</dd>
+              </div>
+              <div className="py-3 flex items-center justify-between">
+                <dt className="text-xs text-muted-foreground font-medium">Decision-maker status</dt>
+                <dd className="text-sm">{p.decision_maker?.status || '—'}</dd>
+              </div>
+              <div className="py-3 flex items-center justify-between">
+                <dt className="text-xs text-muted-foreground font-medium">Refresh needed</dt>
+                <dd className="text-sm">{p.refresh_needed ? 'Yes' : 'No'}</dd>
+              </div>
+              {p.company?.research_error && (
+                <div className="py-3">
+                  <dt className="text-xs text-muted-foreground font-medium mb-0.5">Last refresh error</dt>
+                  <dd className="text-sm text-red-600">{p.company.research_error}</dd>
+                </div>
+              )}
+              {companyEvidence?.freshness && (
+                <div className="py-3">
+                  <dt className="text-xs text-muted-foreground font-medium mb-0.5">Freshness evaluation</dt>
+                  <dd className="text-xs text-muted-foreground">
+                    Overall: {String(companyEvidence.freshness.overall)} · Research: {String((companyEvidence.freshness.research as Record<string, unknown> | undefined)?.state)} · Decision-makers: {String((companyEvidence.freshness.decision_makers as Record<string, unknown> | undefined)?.state)}
+                  </dd>
+                </div>
+              )}
+            </dl>
           </CardContent>
         </Card>
 
@@ -349,6 +431,15 @@ export default function ProspectDetailPage() {
                           {p.decision_maker.job_title && (
                             <p className="text-sm text-muted-foreground">{p.decision_maker.job_title}</p>
                           )}
+                      {p.decision_maker.status && (
+                        <p className="text-xs text-muted-foreground">Status: {p.decision_maker.status}</p>
+                      )}
+                      {p.decision_maker.last_observed_at && (
+                        <p className="text-xs text-muted-foreground">Last observed: {formatDate(p.decision_maker.last_observed_at)}</p>
+                      )}
+                      {p.decision_maker.evidence_excerpt && (
+                        <p className="text-xs text-muted-foreground">Evidence: {truncate(p.decision_maker.evidence_excerpt, 120)}</p>
+                      )}
                         </div>
                       </div>
                       {p.decision_maker.professional_profile_url ? (
@@ -438,6 +529,11 @@ export default function ProspectDetailPage() {
                             {ev.content && (
                               <p className="text-xs text-muted-foreground mt-0.5">{truncate(ev.content, 120)}</p>
                             )}
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              Retrieved: {ev.retrieved_at ? formatDate(ev.retrieved_at) : 'unknown'}
+                              {ev.publication_date ? ` · Published: ${formatDate(ev.publication_date)}` : ''}
+                              {ev.is_accessible === false ? ' · unavailable' : ''}
+                            </p>
                           </div>
                           {ev.url && externalUrl(ev.url) && (
                             <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1">

@@ -29,8 +29,13 @@ from app.engine.contracts import (
     SourceRef,
 )
 from app.engine.errors import ProviderNotConfigured
+from app.engine.providers.crawlee_people import CrawleeDecisionMakerProvider
+from app.engine.providers.crawlee_research import CrawleeResearchProvider
 from app.engine.providers.demo_adapter import DemoEngineProvider
 from app.engine.providers.dns_verifier import DnsEmailVerificationProvider
+from app.engine.providers.multi_discovery import (
+    build_multi_source_discovery,
+)
 from app.engine.providers.search_api import SearchApiProvider
 
 SEARCH_CONFIG_HINT = (
@@ -218,26 +223,27 @@ def build_provider_bundle(
             mode="demo",
         )
 
+    crawlee_research = CrawleeResearchProvider()
+    crawlee_people = CrawleeDecisionMakerProvider()
+    # Discovery is API-independent and multi-source: public search plus optional
+    # customer URLs, public listings and tenant-scoped history.
+    discovery: Any = build_multi_source_discovery(resolved)
+    research: Any = crawlee_research
+    evidence: EvidenceProvider | None = crawlee_research
     if resolved.is_search_api_configured:
-        search = SearchApiProvider.from_settings(resolved)
-        discovery: Any = search
-        research: Any = search
-        evidence: EvidenceProvider | None = search
-    else:
-        unconfigured = UnconfiguredProvider(
-            name=resolved.search_provider or "search_api",
-            capability="company_discovery",
-            detail=f"Real search API is not configured. {SEARCH_CONFIG_HINT}",
-        )
-        discovery = unconfigured
-        research = unconfigured
-        evidence = None
+        # Prefer the explicitly configured adapter when credentials are present,
+        # but never require them for real mode. Keep it as an additional source
+        # rather than replacing the API-independent composite.
+        try:
+            paid = SearchApiProvider.from_settings(resolved)
+        except Exception:  # noqa: BLE001 - optional adapter must not break local discovery
+            paid = None
+        if paid is not None:
+            from app.engine.providers.multi_discovery import CompositeDiscoveryProvider
 
-    decision_makers = UnconfiguredProvider(
-        name="people_data",
-        capability="decision_makers",
-        detail=PEOPLE_CONFIG_HINT,
-    )
+            discovery = CompositeDiscoveryProvider([paid, discovery])
+
+    decision_makers = crawlee_people
     enrichment = UnconfiguredProvider(
         name="contact_enrichment",
         capability="contact_enrichment",
@@ -248,6 +254,10 @@ def build_provider_bundle(
         from app.providers.openai_provider import OpenAIProvider
 
         analyzer = OpenAIProvider()
+    elif resolved.is_local_llm_configured:
+        from app.providers.local_llm_provider import LocalLLMProvider
+
+        analyzer = LocalLLMProvider()
     return ProviderBundle(
         discovery=discovery,
         research=research,

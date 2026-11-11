@@ -182,6 +182,10 @@ export interface Prospect {
   missing_information: string | null;
   source_links: string | null;
   is_ready_for_outreach: boolean | null;
+  research_status: string | null;
+  research_last_successful_at: string | null;
+  decision_maker_status: string | null;
+  refresh_needed: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -203,6 +207,10 @@ export interface CompanyInfo {
   instagram_url: string | null;
   source_url: string | null;
   source_name: string | null;
+  research_status: string | null;
+  research_last_attempted_at: string | null;
+  research_last_successful_at: string | null;
+  research_error: string | null;
 }
 
 export interface DecisionMakerInfo {
@@ -214,6 +222,10 @@ export interface DecisionMakerInfo {
   professional_profile_url: string | null;
   profile_source: string | null;
   is_primary: boolean;
+  status: string | null;
+  last_observed_at: string | null;
+  observation_confidence: number | null;
+  evidence_excerpt: string | null;
 }
 
 export interface EvidenceItem {
@@ -222,6 +234,10 @@ export interface EvidenceItem {
   url: string | null;
   content: string | null;
   evidence_type: string | null;
+  retrieved_at: string | null;
+  publication_date: string | null;
+  is_accessible: boolean | null;
+  verification_status: string | null;
 }
 
 export interface EnrichmentRecord {
@@ -370,6 +386,10 @@ export interface ProspectVerification {
 export interface CompanyResearch {
   provider: string;
   what_it_does: string | null;
+  last_attempted_at: string | null;
+  last_successful_at: string | null;
+  research_status: string | null;
+  error_message: string | null;
   what_it_sells: string | null;
   who_it_serves: string | null;
   positioning: string | null;
@@ -381,11 +401,25 @@ export interface CompanyResearch {
   research_timestamp: string;
 }
 
+export interface DemoReadiness {
+  total_prospects: number;
+  fresh_prospects: number;
+  aging_prospects: number;
+  stale_prospects: number;
+  incomplete_prospects: number;
+  decision_makers_with_fresh_evidence: number;
+  broken_source_urls: number;
+  qualification_blockers: string[];
+  last_successful_refresh: string | null;
+  demo_ready: boolean;
+}
+
 export interface CompanyEvidence {
   company_id: string;
   company_name: string;
   research: CompanyResearch | null;
   evidence: Record<string, unknown>[];
+  freshness: Record<string, unknown> | null;
 }
 
 export interface ProviderStatus {

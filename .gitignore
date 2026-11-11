@@ -235,3 +235,16 @@ frontend/out/
 # Local QA captures and generated export
 artifacts/demo-screenshots/*.png
 artifacts/demo-screenshots/prospects-export.csv
+
+# Crawlee runtime state written by local crawls
+backend/storage/
+
+# Temporary frontend audit/lint tooling and their output
+frontend/audit*
+frontend/check-*.js
+frontend/final-audit*
+frontend/eslint-fixes.js
+frontend/fix-all-errors.js
+frontend/parse-eslint.py
+frontend/test-csv-download.mjs
+frontend/eslint-out*.txt
